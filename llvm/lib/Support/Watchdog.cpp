@@ -14,7 +14,14 @@
 #include "llvm/Config/llvm-config.h"
 
 // Include the platform-specific parts of this class.
-#ifdef LLVM_ON_UNIX
+#if defined(__wasi__)
+namespace llvm {
+namespace sys {
+Watchdog::Watchdog(unsigned int) {}
+Watchdog::~Watchdog() = default;
+} // namespace sys
+} // namespace llvm
+#elif defined(LLVM_ON_UNIX)
 #include "Unix/Watchdog.inc"
 #endif
 #ifdef _WIN32
