@@ -19,6 +19,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorOr.h"
+#include "llvm/Support/ExitCodes.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/Format.h"
@@ -32,6 +33,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <array>
 #include <cmath>
+#include <cstdlib>
 
 //===----------------------------------------------------------------------===//
 //=== WARNING: Implementation here must contain only TRULY operating system
@@ -352,8 +354,55 @@ static bool printMarkupStackTrace(StringRef Argv0, void **StackTrace, int Depth,
   return true;
 }
 
-// Include the platform-specific parts of this class.
-#ifdef LLVM_ON_UNIX
+// Include the platform-specific parts of this class. LLVM's normal Unix signal
+// backend depends on POSIX signal APIs that WASI SDK 30 does not provide.
+#if defined(__wasi__)
+static bool findModulesAndOffsets(void **, int, const char **, intptr_t *,
+                                  const char *, StringSaver &) {
+  return false;
+}
+
+static bool printMarkupContext(raw_ostream &, const char *) { return false; }
+
+#if LLVM_ENABLE_DEBUGLOC_TRACKING_ORIGIN
+namespace llvm::sys {
+template <unsigned long MaxDepth>
+int getStackTrace(std::array<void *, MaxDepth> &) {
+  return 0;
+}
+template int getStackTrace<16ul>(std::array<void *, 16ul> &);
+} // namespace llvm::sys
+#endif
+
+void sys::unregisterHandlers() {}
+
+void sys::CleanupOnSignal(uintptr_t) { sys::RunInterruptHandlers(); }
+
+void sys::RunInterruptHandlers() { sys::RunSignalHandlers(); }
+
+void llvm::sys::SetInterruptFunction(void (*)()) {}
+
+void llvm::sys::SetInfoSignalFunction(void (*)()) {}
+
+void llvm::sys::SetOneShotPipeSignalFunction(void (*)()) {}
+
+void llvm::sys::DefaultOneShotPipeSignalHandler() { std::exit(EX_IOERR); }
+
+bool llvm::sys::RemoveFileOnSignal(StringRef, std::string *) { return false; }
+
+void llvm::sys::DontRemoveFileOnSignal(StringRef) {}
+
+void llvm::sys::AddSignalHandler(sys::SignalHandlerCallback FnPtr,
+                                 void *Cookie) {
+  insertSignalHandler(FnPtr, Cookie);
+}
+
+void llvm::sys::PrintStackTrace(raw_ostream &, int) {}
+
+void llvm::sys::DisableSystemDialogsOnCrash() {}
+
+void llvm::sys::PrintStackTraceOnErrorSignal(StringRef, bool) {}
+#elif defined(LLVM_ON_UNIX)
 #include "Unix/Signals.inc"
 #endif
 #ifdef _WIN32

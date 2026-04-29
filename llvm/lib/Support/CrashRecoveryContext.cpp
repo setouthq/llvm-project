@@ -13,8 +13,11 @@
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/thread.h"
 #include <cassert>
+#include <cstdlib>
 #include <mutex>
+#if !defined(__wasi__)
 #include <setjmp.h>
+#endif
 
 using namespace llvm;
 
@@ -31,7 +34,9 @@ struct CrashRecoveryContextImpl {
   const CrashRecoveryContextImpl *Next;
 
   CrashRecoveryContext *CRC;
+#if !defined(__wasi__)
   ::jmp_buf JumpBuffer;
+#endif
   volatile unsigned Failed : 1;
   unsigned SwitchedThread : 1;
   unsigned ValidJumpBuffer : 1;
@@ -73,8 +78,10 @@ public:
     CRC->RetCode = RetCode;
 
     // Jump back to the RunSafely we were called under.
+#if !defined(__wasi__)
     if (ValidJumpBuffer)
       longjmp(JumpBuffer, 1);
+#endif
 
     // Otherwise let the caller decide of the outcome of the crash. Currently
     // this occurs when using SEH on Windows with MSVC or clang-cl.
@@ -241,7 +248,12 @@ bool CrashRecoveryContext::RunSafely(function_ref<void()> Fn) {
 
 #else // !_MSC_VER
 
-#if defined(_WIN32)
+#if defined(__wasi__)
+
+static void installExceptionOrSignalHandlers() {}
+static void uninstallExceptionOrSignalHandlers() {}
+
+#elif defined(_WIN32)
 // This is a non-MSVC compiler, probably mingw gcc or clang without
 // -fms-extensions. Use vectored exception handling (VEH).
 //
@@ -408,9 +420,13 @@ static void uninstallExceptionOrSignalHandlers() {
     sigaction(Signals[i], &PrevActions[i], nullptr);
 }
 
-#endif // !_WIN32
+#endif // defined(__wasi__)
 
 bool CrashRecoveryContext::RunSafely(function_ref<void()> Fn) {
+#if defined(__wasi__)
+  Fn();
+  return true;
+#else
   // If crash recovery is disabled, do nothing.
   if (gCrashRecoveryEnabled) {
     assert(!Impl && "Crash recovery context already initialized!");
@@ -425,6 +441,7 @@ bool CrashRecoveryContext::RunSafely(function_ref<void()> Fn) {
 
   Fn();
   return true;
+#endif
 }
 
 #endif // !_MSC_VER
@@ -436,6 +453,8 @@ bool CrashRecoveryContext::RunSafely(function_ref<void()> Fn) {
   // This value is a combination of the customer field (bit 29) and severity
   // field (bits 30-31) in the NTSTATUS specification.
   ::RaiseException(0xE0000000 | RetCode, 0, 0, NULL);
+#elif defined(__wasi__)
+  std::abort();
 #else
   // On Unix we don't need to raise an exception, we go directly to
   // HandleCrash(), then longjmp will unwind the stack for us.
@@ -455,6 +474,8 @@ bool CrashRecoveryContext::isCrash(int RetCode) {
   unsigned Code = ((unsigned)RetCode & 0xF0000000) >> 28;
   if (Code != 0xC && Code != 8)
     return false;
+#elif defined(__wasi__)
+  return false;
 #else
   // On Unix, signals are represented by return codes of 128 or higher.
   // Exit code 128 is a reserved value and should not be raised as a signal.
@@ -469,6 +490,8 @@ bool CrashRecoveryContext::throwIfCrash(int RetCode) {
     return false;
 #if defined(_WIN32)
   ::RaiseException(RetCode, 0, 0, NULL);
+#elif defined(__wasi__)
+  return false;
 #else
   llvm::sys::unregisterHandlers();
   raise(RetCode - 128);
