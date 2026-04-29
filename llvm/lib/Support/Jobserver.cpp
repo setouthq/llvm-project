@@ -160,7 +160,7 @@ public:
   bool isValid() const { return IsInitialized; }
 
 private:
-#if defined(LLVM_ON_UNIX)
+#if defined(LLVM_ON_UNIX) && !defined(__wasi__)
   int ReadFD = -1;
   int WriteFD = -1;
   std::string FifoPath;
@@ -171,7 +171,7 @@ private:
 } // namespace llvm
 
 // Include the platform-specific parts of the class.
-#if defined(LLVM_ON_UNIX)
+#if defined(LLVM_ON_UNIX) && !defined(__wasi__)
 #include "Unix/Jobserver.inc"
 #elif defined(_WIN32)
 #include "Windows/Jobserver.inc"
@@ -227,7 +227,7 @@ JobserverClient *JobserverClient::getInstance() {
     }
 
     if (Config.TheMode == JobserverConfig::PosixPipe) {
-#if defined(LLVM_ON_UNIX)
+#if defined(LLVM_ON_UNIX) && !defined(__wasi__)
       if (!areFdsValid(Config.PipeFDs.Read, Config.PipeFDs.Write)) {
         errs() << "Warning: failed to create jobserver client due to invalid "
                   "Pipe FDs in MAKEFLAGS environment variable\n";

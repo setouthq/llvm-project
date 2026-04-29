@@ -20,11 +20,11 @@
 #include <fcntl.h>
 #include <functional>
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__wasi__)
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#else
+#elif defined(_WIN32)
 #include "llvm/Support/Windows/WindowsSupport.h"
 // winsock2.h must be included before afunix.h. Briefly turn off clang-format to
 // avoid error.
@@ -40,6 +40,58 @@
 #endif
 
 using namespace llvm;
+
+#if defined(__wasi__)
+ListeningSocket::ListeningSocket(int SocketFD, StringRef SocketPath,
+                                 int PipeFD[2])
+    : FD(SocketFD), SocketPath(SocketPath), PipeFD{PipeFD[0], PipeFD[1]} {}
+
+ListeningSocket::ListeningSocket(ListeningSocket &&LS)
+    : FD(LS.FD.load()), SocketPath(LS.SocketPath),
+      PipeFD{LS.PipeFD[0], LS.PipeFD[1]} {
+  LS.FD = -1;
+  LS.SocketPath.clear();
+  LS.PipeFD[0] = -1;
+  LS.PipeFD[1] = -1;
+}
+
+Expected<ListeningSocket> ListeningSocket::createUnix(StringRef, int) {
+  return llvm::make_error<StringError>(
+      std::make_error_code(std::errc::operation_not_supported),
+      "UNIX domain sockets are not supported on WASI");
+}
+
+Expected<std::unique_ptr<raw_socket_stream>>
+ListeningSocket::accept(const std::chrono::milliseconds &) {
+  return llvm::make_error<StringError>(
+      std::make_error_code(std::errc::operation_not_supported),
+      "UNIX domain sockets are not supported on WASI");
+}
+
+void ListeningSocket::shutdown() { FD = -1; }
+
+ListeningSocket::~ListeningSocket() { shutdown(); }
+
+raw_socket_stream::raw_socket_stream(int SocketFD)
+    : raw_fd_stream(SocketFD, true) {}
+
+raw_socket_stream::~raw_socket_stream() = default;
+
+Expected<std::unique_ptr<raw_socket_stream>>
+raw_socket_stream::createConnectedUnix(StringRef) {
+  return llvm::make_error<StringError>(
+      std::make_error_code(std::errc::operation_not_supported),
+      "UNIX domain sockets are not supported on WASI");
+}
+
+ssize_t raw_socket_stream::read(char *, size_t,
+                                const std::chrono::milliseconds &) {
+  raw_fd_stream::error_detected(
+      std::make_error_code(std::errc::operation_not_supported));
+  return -1;
+}
+
+#else
 
 #ifdef _WIN32
 WSABalancer::WSABalancer() {
@@ -356,3 +408,5 @@ ssize_t raw_socket_stream::read(char *Ptr, size_t Size,
   }
   return raw_fd_stream::read(Ptr, Size);
 }
+
+#endif
