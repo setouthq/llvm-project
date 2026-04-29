@@ -16,11 +16,15 @@
 #include "llvm/Config/config.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Support/CrashRecoveryContext.h"
+#include "llvm/Support/Errno.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 
 #include <optional>
 #include <stdlib.h> // for _Exit
+#if defined(__wasi__)
+#include <unistd.h>
+#endif
 
 using namespace llvm;
 using namespace sys;
@@ -118,7 +122,61 @@ bool Process::AreCoreFilesPrevented() { return coreFilesPrevented; }
 }
 
 // Include the platform-specific parts of this class.
-#ifdef LLVM_ON_UNIX
+#if defined(__wasi__)
+Process::Pid Process::getProcessId() { return 1; }
+
+Expected<unsigned> Process::getPageSize() { return 65536; }
+
+size_t Process::GetMallocUsage() { return 0; }
+
+void Process::GetTimeUsage(TimePoint<> &elapsed,
+                           std::chrono::nanoseconds &user_time,
+                           std::chrono::nanoseconds &sys_time) {
+  elapsed = std::chrono::system_clock::now();
+  user_time = std::chrono::nanoseconds::zero();
+  sys_time = std::chrono::nanoseconds::zero();
+}
+
+void Process::PreventCoreFiles() { coreFilesPrevented = true; }
+
+std::optional<std::string> Process::GetEnv(StringRef Name) {
+  std::string NameStr = Name.str();
+  const char *Val = ::getenv(NameStr.c_str());
+  if (!Val)
+    return std::nullopt;
+  return std::string(Val);
+}
+
+std::error_code Process::FixupStandardFileDescriptors() {
+  return std::error_code();
+}
+
+std::error_code Process::SafelyCloseFileDescriptor(int FD) {
+  if (::close(FD) < 0)
+    return errnoAsErrorCode();
+  return std::error_code();
+}
+
+bool Process::StandardInIsUserInput() { return false; }
+bool Process::StandardOutIsDisplayed() { return false; }
+bool Process::StandardErrIsDisplayed() { return false; }
+bool Process::FileDescriptorIsDisplayed(int) { return false; }
+bool Process::FileDescriptorHasColors(int) { return false; }
+unsigned Process::StandardOutColumns() { return 0; }
+unsigned Process::StandardErrColumns() { return 0; }
+bool Process::StandardOutHasColors() { return false; }
+bool Process::StandardErrHasColors() { return false; }
+void Process::UseANSIEscapeCodes(bool) {}
+bool Process::ColorNeedsFlush() { return false; }
+const char *Process::OutputColor(char code, bool bold, bool bg) {
+  return colorcodes[bg ? 1 : 0][bold ? 1 : 0][code & 15];
+}
+const char *Process::OutputBold(bool) { return "\033[1m"; }
+const char *Process::OutputReverse() { return "\033[7m"; }
+const char *Process::ResetColor() { return "\033[0m"; }
+unsigned Process::GetRandomNumber() { return static_cast<unsigned>(::rand()); }
+[[noreturn]] void Process::ExitNoCleanup(int RetCode) { _Exit(RetCode); }
+#elif defined(LLVM_ON_UNIX)
 #include "Unix/Process.inc"
 #endif
 #ifdef _WIN32

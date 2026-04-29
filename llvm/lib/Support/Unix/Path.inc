@@ -31,7 +31,9 @@
 #endif
 
 #include <dirent.h>
+#if !defined(__wasi__)
 #include <pwd.h>
+#endif
 
 #ifdef __APPLE__
 #include <copyfile.h>
@@ -338,6 +340,8 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
   char link_path[PATH_MAX];
   if (realpath(DLInfo.dli_fname, link_path))
     return link_path;
+#elif defined(__wasi__)
+  return argv0 ? std::string(argv0) : std::string();
 #else
 #error GetMainExecutable is not implemented on this host yet.
 #endif
@@ -569,6 +573,8 @@ static bool is_local_impl(struct STATVFS &Vfs) {
   // The file system can have an arbitrary structure on z/OS; must go with the
   // conservative answer.
   return false;
+#elif defined(__wasi__)
+  return true;
 #else
   return !!(STATVFS_F_FLAG(Vfs) & MNT_LOCAL);
 #endif
@@ -704,6 +710,9 @@ static void expandTildeExpr(SmallVectorImpl<char> &Path) {
 
   // This is a string of the form ~username/, look up this user's entry in the
   // password database.
+#if defined(__wasi__)
+  return;
+#else
   std::unique_ptr<char[]> Buf;
   long BufSize = sysconf(_SC_GETPW_R_SIZE_MAX);
   if (BufSize <= 0)
@@ -723,6 +732,7 @@ static void expandTildeExpr(SmallVectorImpl<char> &Path) {
   Path.clear();
   Path.append(Entry->pw_dir, Entry->pw_dir + strlen(Entry->pw_dir));
   llvm::sys::path::append(Path, Storage);
+#endif
 }
 
 void expand_tilde(const Twine &path, SmallVectorImpl<char> &dest) {
@@ -803,11 +813,15 @@ std::error_code status(int FD, file_status &Result) {
 }
 
 unsigned getUmask() {
+#if defined(__wasi__)
+  return 0;
+#else
   // Chose arbitary new mask and reset the umask to the old mask.
   // umask(2) never fails so ignore the return of the second call.
   unsigned Mask = ::umask(0);
   (void)::umask(Mask);
   return Mask;
+#endif
 }
 
 std::error_code setPermissions(const Twine &Path, perms Permissions) {
@@ -922,7 +936,7 @@ void mapped_file_region::dontNeedImpl() {
   assert(Mode == mapped_file_region::readonly);
   if (!Mapping)
     return;
-#if defined(__MVS__) || defined(_AIX)
+#if defined(__MVS__) || defined(_AIX) || defined(__wasi__)
     // If we don't have madvise, or it isn't beneficial, treat this as a no-op.
 #elif defined(POSIX_MADV_DONTNEED)
   ::posix_madvise(Mapping, Size, POSIX_MADV_DONTNEED);
@@ -935,7 +949,7 @@ void mapped_file_region::willNeedImpl() {
   assert(Mode == mapped_file_region::readonly);
   if (!Mapping)
     return;
-#if defined(__MVS__) || defined(_AIX)
+#if defined(__MVS__) || defined(_AIX) || defined(__wasi__)
   // If we don't have madvise, or it isn't beneficial, treat this as a no-op.
 #elif defined(POSIX_MADV_WILLNEED)
   ::posix_madvise(Mapping, Size, POSIX_MADV_WILLNEED);
@@ -1318,6 +1332,9 @@ Expected<size_t> readNativeFileSlice(file_t FD, MutableArrayRef<char> Buf,
 
 std::error_code tryLockFile(int FD, std::chrono::milliseconds Timeout,
                             LockKind Kind) {
+#if defined(__wasi__)
+  return make_error_code(errc::function_not_supported);
+#else
   auto Start = std::chrono::steady_clock::now();
   auto End = Start + Timeout;
   do {
@@ -1344,9 +1361,13 @@ std::error_code tryLockFile(int FD, std::chrono::milliseconds Timeout,
     usleep(1000);
   } while (std::chrono::steady_clock::now() < End);
   return make_error_code(errc::no_lock_available);
+#endif
 }
 
 std::error_code lockFile(int FD, LockKind Kind) {
+#if defined(__wasi__)
+  return make_error_code(errc::function_not_supported);
+#else
   struct flock Lock;
   memset(&Lock, 0, sizeof(Lock));
   switch (Kind) {
@@ -1363,9 +1384,13 @@ std::error_code lockFile(int FD, LockKind Kind) {
   if (sys::RetryAfterSignal(-1, ::fcntl, FD, F_SETLKW, &Lock) != -1)
     return std::error_code();
   return errnoAsErrorCode();
+#endif
 }
 
 std::error_code unlockFile(int FD) {
+#if defined(__wasi__)
+  return make_error_code(errc::function_not_supported);
+#else
   struct flock Lock;
   Lock.l_type = F_UNLCK;
   Lock.l_whence = SEEK_SET;
@@ -1374,6 +1399,7 @@ std::error_code unlockFile(int FD) {
   if (sys::RetryAfterSignal(-1, ::fcntl, FD, F_SETLK, &Lock) != -1)
     return std::error_code();
   return errnoAsErrorCode();
+#endif
 }
 
 std::error_code closeFile(file_t &F) {
@@ -1479,11 +1505,15 @@ std::error_code readlink(const Twine &path, SmallVectorImpl<char> &dest) {
 }
 
 std::error_code changeFileOwnership(int FD, uint32_t Owner, uint32_t Group) {
+#if defined(__wasi__)
+  return make_error_code(errc::function_not_supported);
+#else
   auto FChown = [&]() { return ::fchown(FD, Owner, Group); };
   // Retry if fchown call fails due to interruption.
   if ((sys::RetryAfterSignal(-1, FChown)) < 0)
     return errnoAsErrorCode();
   return std::error_code();
+#endif
 }
 
 } // end namespace fs
@@ -1494,6 +1524,9 @@ bool home_directory(SmallVectorImpl<char> &result) {
   std::unique_ptr<char[]> Buf;
   char *RequestedDir = getenv("HOME");
   if (!RequestedDir) {
+#if defined(__wasi__)
+    return false;
+#else
     long BufSize = sysconf(_SC_GETPW_R_SIZE_MAX);
     if (BufSize <= 0)
       BufSize = 16384;
@@ -1503,6 +1536,7 @@ bool home_directory(SmallVectorImpl<char> &result) {
     getpwuid_r(getuid(), &Pwd, Buf.get(), BufSize, &pw);
     if (pw && pw->pw_dir)
       RequestedDir = pw->pw_dir;
+#endif
   }
   if (!RequestedDir)
     return false;
