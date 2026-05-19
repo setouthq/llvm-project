@@ -108,7 +108,7 @@
 #include <set>
 #include <string>
 #include <utility>
-#if LLVM_ON_UNIX
+#if LLVM_ON_UNIX && !defined(__wasi__)
 #include <unistd.h> // getpid
 #endif
 
@@ -1859,7 +1859,7 @@ bool Driver::getCrashDiagnosticFile(StringRef ReproCrashFilename,
     CrashDiagDir = "/";
   path::append(CrashDiagDir, "Library/Logs/DiagnosticReports");
   int PID =
-#if LLVM_ON_UNIX
+#if LLVM_ON_UNIX && !defined(__wasi__)
       getpid();
 #else
       0;
