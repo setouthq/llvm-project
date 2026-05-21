@@ -25,6 +25,7 @@
 #include "llvm/Support/Program.h"
 #include "llvm/Support/YAMLParser.h"
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 
 #ifdef _WIN32
@@ -96,6 +97,15 @@ const std::string &CIndexer::getClangResourcesPath() {
   // Did we already compute the path?
   if (!ResourcesPath.empty())
     return ResourcesPath;
+
+#if defined(__wasi__)
+  if (const char *ResourceDir = std::getenv("LIBCLANG_RESOURCE_DIR")) {
+    if (ResourceDir[0] != '\0') {
+      ResourcesPath = ResourceDir;
+      return ResourcesPath;
+    }
+  }
+#endif
 
   SmallString<128> LibClangPath;
 
