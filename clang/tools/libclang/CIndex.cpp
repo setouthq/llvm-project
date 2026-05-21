@@ -4321,18 +4321,34 @@ clang_parseTranslationUnit_Impl(CXIndex CIdx, const char *source_filename,
   // precompiled headers are involved), we disable it by default.
   // Only do this if we haven't found a spell-checking-related argument.
   bool FoundSpellCheckingArgument = false;
+  bool FoundResourceDirArgument = false;
   for (int I = 0; I != num_command_line_args; ++I) {
     if (strcmp(command_line_args[I], "-fno-spell-checking") == 0 ||
         strcmp(command_line_args[I], "-fspell-checking") == 0) {
       FoundSpellCheckingArgument = true;
-      break;
+    } else if (llvm::StringRef(command_line_args[I]) == "-resource-dir" ||
+               llvm::StringRef(command_line_args[I]).starts_with(
+                   "-resource-dir=")) {
+      FoundResourceDirArgument = true;
     }
+    if (FoundSpellCheckingArgument && FoundResourceDirArgument)
+      break;
   }
   Args->insert(Args->end(), command_line_args,
                command_line_args + num_command_line_args);
 
   if (!FoundSpellCheckingArgument)
     Args->insert(Args->begin() + 1, "-fno-spell-checking");
+
+#if defined(__wasi__)
+  if (!FoundResourceDirArgument) {
+    const std::string &ResourcePath = CXXIdx->getClangResourcesPath();
+    if (!ResourcePath.empty()) {
+      Args->push_back("-resource-dir");
+      Args->push_back(ResourcePath.c_str());
+    }
+  }
+#endif
 
   // The 'source_filename' argument is optional.  If the caller does not
   // specify it then it is assumed that the source file is specified
