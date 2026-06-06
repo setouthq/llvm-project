@@ -67,6 +67,36 @@ clang_target_link_libraries(clang
   clangSerialization
   )
 
+if(CLANG_ENABLE_IN_PROCESS_WASM_LD)
+  if(NOT TARGET lldWasm)
+    message(FATAL_ERROR
+      "CLANG_ENABLE_IN_PROCESS_WASM_LD requires LLVM_ENABLE_PROJECTS to include lld")
+  endif()
+  if(NOT LLD_INCLUDE_DIR)
+    set(LLD_INCLUDE_DIR "${LLVM_MAIN_SRC_DIR}/../lld/include")
+  endif()
+  target_include_directories(clang PRIVATE ${LLD_INCLUDE_DIR})
+  target_link_libraries(clang PRIVATE lldWasm)
+endif()
+
+if(CLANG_ENABLE_IN_PROCESS_WASM_COMPONENT_LD)
+  if(NOT CLANG_ENABLE_IN_PROCESS_WASM_LD)
+    message(FATAL_ERROR
+      "CLANG_ENABLE_IN_PROCESS_WASM_COMPONENT_LD requires CLANG_ENABLE_IN_PROCESS_WASM_LD")
+  endif()
+  if(NOT CLANG_IN_PROCESS_WASM_COMPONENT_LD_STATIC_LIBRARY)
+    message(FATAL_ERROR
+      "CLANG_ENABLE_IN_PROCESS_WASM_COMPONENT_LD requires CLANG_IN_PROCESS_WASM_COMPONENT_LD_STATIC_LIBRARY")
+  endif()
+  if(NOT EXISTS "${CLANG_IN_PROCESS_WASM_COMPONENT_LD_STATIC_LIBRARY}")
+    message(FATAL_ERROR
+      "CLANG_IN_PROCESS_WASM_COMPONENT_LD_STATIC_LIBRARY does not exist: "
+      "${CLANG_IN_PROCESS_WASM_COMPONENT_LD_STATIC_LIBRARY}")
+  endif()
+  target_link_libraries(clang PRIVATE
+    "${CLANG_IN_PROCESS_WASM_COMPONENT_LD_STATIC_LIBRARY}")
+endif()
+
 if(WIN32 AND NOT CYGWIN)
   # Prevent versioning if the buildhost is targeting for Win32.
 else()

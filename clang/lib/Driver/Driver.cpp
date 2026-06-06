@@ -5345,9 +5345,30 @@ void Driver::BuildJobs(Compilation &C) const {
                        /*TargetDeviceOffloadKind*/ Action::OFK_None);
   }
 
-  // If we have more than one job, then disable integrated-cc1 for now. Do this
-  // also when we need to report process execution statistics.
-  if (C.getJobs().size() > 1 || CCPrintProcessStats)
+  // If we have more than one job, then disable integrated-cc1 for now. Keep the
+  // narrow two-job path used by WASI-hosted clang builds where cc1 is followed
+  // by an in-process wasm linker.
+  auto CanRunTwoJobPipelineInProcess = [&C]() {
+    if (C.getJobs().size() != 2)
+      return false;
+
+    bool HasCompileJob = false;
+    bool HasLinkJob = false;
+    for (const auto &J : C.getJobs()) {
+      if (!J.InProcess)
+        return false;
+      if (J.getCreator().isLinkJob())
+        HasLinkJob = true;
+      else
+        HasCompileJob = true;
+    }
+    return HasCompileJob && HasLinkJob;
+  };
+
+  // Also disable in-process jobs when we need to report process execution
+  // statistics.
+  if ((C.getJobs().size() > 1 && !CanRunTwoJobPipelineInProcess()) ||
+      CCPrintProcessStats)
     for (auto &J : C.getJobs())
       J.InProcess = false;
 

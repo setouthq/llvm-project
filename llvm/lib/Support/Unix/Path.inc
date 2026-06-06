@@ -328,6 +328,8 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
       return std::string(real_path);
     break; // Found entry, but realpath failed.
   }
+#elif defined(__wasi__)
+  return argv0 ? std::string(argv0) : std::string();
 #elif defined(HAVE_DLOPEN)
   // Use dladdr to get executable path if available.
   Dl_info DLInfo;
@@ -340,8 +342,6 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
   char link_path[PATH_MAX];
   if (realpath(DLInfo.dli_fname, link_path))
     return link_path;
-#elif defined(__wasi__)
-  return argv0 ? std::string(argv0) : std::string();
 #else
 #error GetMainExecutable is not implemented on this host yet.
 #endif

@@ -306,6 +306,20 @@ public:
       llvm::function_ref<int(SmallVectorImpl<const char *> &ArgV)>;
   CC1ToolFunc CC1Main = nullptr;
 
+  /// Pointer to an in-process wasm-ld entry point, if available.
+  /// This is intentionally installed by the clang executable rather than by
+  /// clangDriver so libclangDriver does not need to link against LLD.
+  using WasmLdToolFunc =
+      llvm::function_ref<int(SmallVectorImpl<const char *> &ArgV)>;
+  WasmLdToolFunc WasmLdMain = nullptr;
+
+  /// Pointer to an in-process wasm-component-ld entry point, if available.
+  /// Like WasmLdMain, this is installed by the clang executable to keep
+  /// clangDriver from linking directly against the component linker.
+  using WasmComponentLdToolFunc =
+      llvm::function_ref<int(SmallVectorImpl<const char *> &ArgV)>;
+  WasmComponentLdToolFunc WasmComponentLdMain = nullptr;
+
 private:
   /// Raw target triple.
   std::string TargetTriple;

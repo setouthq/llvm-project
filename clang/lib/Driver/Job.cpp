@@ -452,6 +452,97 @@ void CC1Command::setEnvironment(llvm::ArrayRef<const char *> NewEnvironment) {
       "The CC1Command doesn't support changing the environment vars!");
 }
 
+InProcessWasmLdCommand::InProcessWasmLdCommand(
+    const Action &Source, const Tool &Creator,
+    ResponseFileSupport ResponseSupport, const char *Executable,
+    const llvm::opt::ArgStringList &Arguments, ArrayRef<InputInfo> Inputs,
+    ArrayRef<InputInfo> Outputs)
+    : Command(Source, Creator, ResponseSupport, Executable, Arguments, Inputs,
+              Outputs) {
+  InProcess = true;
+}
+
+void InProcessWasmLdCommand::Print(raw_ostream &OS, const char *Terminator,
+                                   bool Quote,
+                                   CrashReportInfo *CrashInfo) const {
+  if (InProcess)
+    OS << " (in-process)\n";
+  Command::Print(OS, Terminator, Quote, CrashInfo);
+}
+
+int InProcessWasmLdCommand::Execute(
+    ArrayRef<std::optional<StringRef>> Redirects, std::string *ErrMsg,
+    bool *ExecutionFailed) const {
+  if (!InProcess)
+    return Command::Execute(Redirects, ErrMsg, ExecutionFailed);
+
+  const Driver &D = getCreator().getToolChain().getDriver();
+  if (!D.WasmLdMain)
+    return Command::Execute(Redirects, ErrMsg, ExecutionFailed);
+
+  PrintFileNames();
+
+  SmallVector<const char *, 128> Argv;
+  Argv.push_back(getExecutable());
+  Argv.append(getArguments().begin(), getArguments().end());
+
+  if (ExecutionFailed)
+    *ExecutionFailed = false;
+
+  return D.WasmLdMain(Argv);
+}
+
+void InProcessWasmLdCommand::setEnvironment(llvm::ArrayRef<const char *>) {
+  llvm_unreachable(
+      "The InProcessWasmLdCommand doesn't support changing environment vars!");
+}
+
+InProcessWasmComponentLdCommand::InProcessWasmComponentLdCommand(
+    const Action &Source, const Tool &Creator,
+    ResponseFileSupport ResponseSupport, const char *Executable,
+    const llvm::opt::ArgStringList &Arguments, ArrayRef<InputInfo> Inputs,
+    ArrayRef<InputInfo> Outputs)
+    : Command(Source, Creator, ResponseSupport, Executable, Arguments, Inputs,
+              Outputs) {
+  InProcess = true;
+}
+
+void InProcessWasmComponentLdCommand::Print(raw_ostream &OS,
+                                            const char *Terminator, bool Quote,
+                                            CrashReportInfo *CrashInfo) const {
+  if (InProcess)
+    OS << " (in-process)\n";
+  Command::Print(OS, Terminator, Quote, CrashInfo);
+}
+
+int InProcessWasmComponentLdCommand::Execute(
+    ArrayRef<std::optional<StringRef>> Redirects, std::string *ErrMsg,
+    bool *ExecutionFailed) const {
+  if (!InProcess)
+    return Command::Execute(Redirects, ErrMsg, ExecutionFailed);
+
+  const Driver &D = getCreator().getToolChain().getDriver();
+  if (!D.WasmComponentLdMain)
+    return Command::Execute(Redirects, ErrMsg, ExecutionFailed);
+
+  PrintFileNames();
+
+  SmallVector<const char *, 128> Argv;
+  Argv.push_back(getExecutable());
+  Argv.append(getArguments().begin(), getArguments().end());
+
+  if (ExecutionFailed)
+    *ExecutionFailed = false;
+
+  return D.WasmComponentLdMain(Argv);
+}
+
+void InProcessWasmComponentLdCommand::setEnvironment(
+    llvm::ArrayRef<const char *>) {
+  llvm_unreachable("The InProcessWasmComponentLdCommand doesn't support "
+                   "changing environment vars!");
+}
+
 void JobList::Print(raw_ostream &OS, const char *Terminator, bool Quote,
                     CrashReportInfo *CrashInfo) const {
   for (const auto &Job : *this)

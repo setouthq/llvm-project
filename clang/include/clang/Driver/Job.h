@@ -256,6 +256,45 @@ public:
   void setEnvironment(llvm::ArrayRef<const char *> NewEnvironment) override;
 };
 
+/// Use the wasm-ld callback when available, to avoid creating a linker process.
+class InProcessWasmLdCommand : public Command {
+public:
+  InProcessWasmLdCommand(const Action &Source, const Tool &Creator,
+                         ResponseFileSupport ResponseSupport,
+                         const char *Executable,
+                         const llvm::opt::ArgStringList &Arguments,
+                         ArrayRef<InputInfo> Inputs,
+                         ArrayRef<InputInfo> Outputs = {});
+
+  void Print(llvm::raw_ostream &OS, const char *Terminator, bool Quote,
+             CrashReportInfo *CrashInfo = nullptr) const override;
+
+  int Execute(ArrayRef<std::optional<StringRef>> Redirects, std::string *ErrMsg,
+              bool *ExecutionFailed) const override;
+
+  void setEnvironment(llvm::ArrayRef<const char *> NewEnvironment) override;
+};
+
+/// Use the wasm-component-ld callback when available, to avoid creating a
+/// component linker process.
+class InProcessWasmComponentLdCommand : public Command {
+public:
+  InProcessWasmComponentLdCommand(const Action &Source, const Tool &Creator,
+                                  ResponseFileSupport ResponseSupport,
+                                  const char *Executable,
+                                  const llvm::opt::ArgStringList &Arguments,
+                                  ArrayRef<InputInfo> Inputs,
+                                  ArrayRef<InputInfo> Outputs = {});
+
+  void Print(llvm::raw_ostream &OS, const char *Terminator, bool Quote,
+             CrashReportInfo *CrashInfo = nullptr) const override;
+
+  int Execute(ArrayRef<std::optional<StringRef>> Redirects, std::string *ErrMsg,
+              bool *ExecutionFailed) const override;
+
+  void setEnvironment(llvm::ArrayRef<const char *> NewEnvironment) override;
+};
+
 /// JobList - A sequence of jobs to perform.
 class JobList {
 public:

@@ -12,6 +12,7 @@
 #include "clang/Driver/CommonArgs.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Driver.h"
+#include "clang/Driver/Job.h"
 #include "clang/Options/Options.h"
 #include "llvm/Config/llvm-config.h" // for LLVM_VERSION_STRING
 #include "llvm/Option/ArgList.h"
@@ -32,6 +33,15 @@ std::string WebAssembly::getMultiarchTriple(const Driver &D,
                                             StringRef SysRoot) const {
     return (TargetTriple.getArchName() + "-" +
             TargetTriple.getOSAndEnvironmentName()).str();
+}
+
+/// Returns a directory name in which separate objects compile with/without
+/// exceptions may lie. This is used both for `#include` paths as well as lib
+/// paths.
+static std::string GetCXXExceptionsDir(const ArgList &DriverArgs) {
+  if (DriverArgs.getLastArg(options::OPT_fwasm_exceptions))
+    return "eh";
+  return "noeh";
 }
 
 std::string wasm::Linker::getLinkerPath(const ArgList &Args) const {
@@ -67,6 +77,26 @@ static bool TargetBuildsComponents(const llvm::Triple &TargetTriple) {
          TargetTriple.getOSName() != "wasi";
 }
 
+static bool ShouldUseInProcessWasmLd(const Driver &D, StringRef Linker) {
+#if CLANG_ENABLE_IN_PROCESS_WASM_LD
+  return D.WasmLdMain &&
+         llvm::sys::path::stem(Linker).ends_with_insensitive("wasm-ld");
+#else
+  return false;
+#endif
+}
+
+static bool ShouldUseInProcessWasmComponentLd(const Driver &D,
+                                              StringRef Linker) {
+#if CLANG_ENABLE_IN_PROCESS_WASM_COMPONENT_LD
+  return D.WasmComponentLdMain &&
+         llvm::sys::path::stem(Linker).ends_with_insensitive(
+             "wasm-component-ld");
+#else
+  return false;
+#endif
+}
+
 static bool WantsPthread(const llvm::Triple &Triple, const ArgList &Args) {
   bool WantsPthread =
       Args.hasFlag(options::OPT_pthread, options::OPT_no_pthread, false);
@@ -87,6 +117,10 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   const ToolChain &ToolChain = getToolChain();
   const char *Linker = Args.MakeArgString(getLinkerPath(Args));
+  bool UseInProcessWasmLd =
+      ShouldUseInProcessWasmLd(ToolChain.getDriver(), Linker);
+  bool UseInProcessWasmComponentLd =
+      ShouldUseInProcessWasmComponentLd(ToolChain.getDriver(), Linker);
   ArgStringList CmdArgs;
 
   CmdArgs.push_back("-m");
@@ -182,7 +216,8 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   // Don't use wasm-opt by default on `wasip2` as it doesn't have support for
   // components at this time. Retain the historical default otherwise, though,
   // of running `wasm-opt` by default.
-  bool WasmOptDefault = !TargetBuildsComponents(ToolChain.getTriple());
+  bool WasmOptDefault =
+      !UseInProcessWasmLd && !TargetBuildsComponents(ToolChain.getTriple());
   bool RunWasmOpt = Args.hasFlag(options::OPT_wasm_opt,
                                  options::OPT_no_wasm_opt, WasmOptDefault);
 
@@ -200,9 +235,19 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("--keep-section=target_features");
   }
 
-  C.addCommand(std::make_unique<Command>(JA, *this,
-                                         ResponseFileSupport::AtFileCurCP(),
-                                         Linker, CmdArgs, Inputs, Output));
+  if (UseInProcessWasmComponentLd) {
+    C.addCommand(std::make_unique<InProcessWasmComponentLdCommand>(
+        JA, *this, ResponseFileSupport::None(), Linker, CmdArgs, Inputs,
+        Output));
+  } else if (UseInProcessWasmLd) {
+    C.addCommand(std::make_unique<InProcessWasmLdCommand>(
+        JA, *this, ResponseFileSupport::None(), Linker, CmdArgs, Inputs,
+        Output));
+  } else {
+    C.addCommand(std::make_unique<Command>(JA, *this,
+                                           ResponseFileSupport::AtFileCurCP(),
+                                           Linker, CmdArgs, Inputs, Output));
+  }
 
   if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
     if (!WasmOptPath.empty()) {
@@ -230,12 +275,16 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   }
 }
 
-/// Given a base library directory, append path components to form the
-/// LTO directory.
-static std::string AppendLTOLibDir(const std::string &Dir) {
+/// Append `Dir` to `Paths`, but also include the LTO directories before that if
+/// LTO is eanbled.
+static void AppendLibDirAndLTODir(ToolChain::path_list &Paths, const Driver &D,
+                                  const std::string &Dir) {
+  if (D.isUsingLTO()) {
     // The version allows the path to be keyed to the specific version of
     // LLVM in used, as the bitcode format is not stable.
-    return Dir + "/llvm-lto/" LLVM_VERSION_STRING;
+    Paths.push_back(Dir + "/llvm-lto/" LLVM_VERSION_STRING);
+  }
+  Paths.push_back(Dir);
 }
 
 WebAssembly::WebAssembly(const Driver &D, const llvm::Triple &Triple,
@@ -256,14 +305,15 @@ WebAssembly::WebAssembly(const Driver &D, const llvm::Triple &Triple,
   } else {
     const std::string MultiarchTriple =
         getMultiarchTriple(getDriver(), Triple, SysRoot);
-    if (D.isUsingLTO()) {
-      // For LTO, enable use of lto-enabled sysroot libraries too, if available.
-      // Note that the directory is keyed to the LLVM revision, as LLVM's
-      // bitcode format is not stable.
-      auto Dir = AppendLTOLibDir(SysRoot + "/lib/" + MultiarchTriple);
-      getFilePaths().push_back(Dir);
-    }
-    getFilePaths().push_back(SysRoot + "/lib/" + MultiarchTriple);
+    std::string TripleLibDir = SysRoot + "/lib/" + MultiarchTriple;
+    // Allow sysroots to segregate objects based on whether exceptions are
+    // enabled or not. This is intended to assist with distribution of pre-built
+    // sysroots that contain libraries that are capable of producing binaries
+    // entirely without exception-handling instructions but also with if
+    // exceptions are enabled, for example.
+    AppendLibDirAndLTODir(getFilePaths(), D,
+                          TripleLibDir + "/" + GetCXXExceptionsDir(Args));
+    AppendLibDirAndLTODir(getFilePaths(), D, TripleLibDir);
   }
 
   if (getTriple().getOS() == llvm::Triple::WASI) {
@@ -580,13 +630,18 @@ void WebAssembly::addLibCxxIncludePaths(
   if (Version.empty())
     return;
 
-  // First add the per-target include path if the OS is known.
+  // First add the per-target-per-exception-handling include path if the
+  // OS is known,  then second add the per-target include path.
   if (IsKnownOs) {
-    std::string TargetDir = LibPath + "/" + MultiarchTriple + "/c++/" + Version;
-    addSystemInclude(DriverArgs, CC1Args, TargetDir);
+    std::string TargetDir = LibPath + "/" + MultiarchTriple;
+    std::string Suffix = "/c++/" + Version;
+    addSystemInclude(DriverArgs, CC1Args,
+                     TargetDir + "/" + GetCXXExceptionsDir(DriverArgs) +
+                         Suffix);
+    addSystemInclude(DriverArgs, CC1Args, TargetDir + Suffix);
   }
 
-  // Second add the generic one.
+  // Third add the generic one.
   addSystemInclude(DriverArgs, CC1Args, LibPath + "/c++/" + Version);
 }
 

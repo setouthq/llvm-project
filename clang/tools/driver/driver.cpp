@@ -51,6 +51,11 @@
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Host.h"
+#if CLANG_ENABLE_IN_PROCESS_WASM_LD
+#include "lld/Common/Driver.h"
+LLD_HAS_DRIVER(wasm)
+#endif
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <set>
@@ -59,6 +64,37 @@
 using namespace clang;
 using namespace clang::driver;
 using namespace llvm::opt;
+
+#if CLANG_ENABLE_IN_PROCESS_WASM_LD
+static int ExecuteInProcessWasmLd(SmallVectorImpl<const char *> &ArgV) {
+  lld::DriverDef WasmDriver[] = {{lld::Wasm, &lld::wasm::link}};
+  lld::Result R = lld::lldMain(ArgV, llvm::outs(), llvm::errs(), WasmDriver);
+  return R.retCode;
+}
+#endif
+
+#if CLANG_ENABLE_IN_PROCESS_WASM_COMPONENT_LD
+#if !CLANG_ENABLE_IN_PROCESS_WASM_LD
+#error "CLANG_ENABLE_IN_PROCESS_WASM_COMPONENT_LD requires CLANG_ENABLE_IN_PROCESS_WASM_LD"
+#endif
+
+extern "C" int wasm_component_ld_main(size_t ArgC, const char *const *ArgV,
+                                      int (*WasmLd)(size_t,
+                                                    const char *const *));
+
+static int ExecuteInProcessWasmLdForComponent(size_t ArgC,
+                                              const char *const *ArgV) {
+  SmallVector<const char *, 128> Args;
+  Args.append(ArgV, ArgV + ArgC);
+  return ExecuteInProcessWasmLd(Args);
+}
+
+static int
+ExecuteInProcessWasmComponentLd(SmallVectorImpl<const char *> &ArgV) {
+  return wasm_component_ld_main(ArgV.size(), ArgV.data(),
+                                ExecuteInProcessWasmLdForComponent);
+}
+#endif
 
 std::string GetExecutablePath(const char *Argv0, bool CanonicalPrefixes) {
   if (!CanonicalPrefixes) {
@@ -380,6 +416,12 @@ int clang_main(int Argc, char **Argv, const llvm::ToolContext &ToolContext) {
     // Ensure the CC1Command actually catches cc1 crashes
     llvm::CrashRecoveryContext::Enable();
   }
+#if CLANG_ENABLE_IN_PROCESS_WASM_LD
+  TheDriver.WasmLdMain = ExecuteInProcessWasmLd;
+#endif
+#if CLANG_ENABLE_IN_PROCESS_WASM_COMPONENT_LD
+  TheDriver.WasmComponentLdMain = ExecuteInProcessWasmComponentLd;
+#endif
 
   std::unique_ptr<Compilation> C(TheDriver.BuildCompilation(Args));
 

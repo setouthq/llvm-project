@@ -82,6 +82,12 @@
 /* Spawn a new process clang.exe for the CC1 tool invocation, when necessary */
 #cmakedefine01 CLANG_SPAWN_CC1
 
+/* Call wasm-ld in-process when the clang driver installs a wasm linker hook */
+#cmakedefine01 CLANG_ENABLE_IN_PROCESS_WASM_LD
+
+/* Call wasm-component-ld in-process when the clang driver installs a hook */
+#cmakedefine01 CLANG_ENABLE_IN_PROCESS_WASM_COMPONENT_LD
+
 /* Whether CIR is built into Clang */
 #cmakedefine01 CLANG_ENABLE_CIR
 

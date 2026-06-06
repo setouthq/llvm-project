@@ -240,6 +240,13 @@ set(PPC_LINUX_DEFAULT_IEEELONGDOUBLE OFF CACHE BOOL
 set(CLANG_SPAWN_CC1 OFF CACHE BOOL
     "Whether clang should use a new process for the CC1 invocation")
 
+set(CLANG_ENABLE_IN_PROCESS_WASM_LD OFF CACHE BOOL
+    "Whether clang should call wasm-ld in-process when available")
+set(CLANG_ENABLE_IN_PROCESS_WASM_COMPONENT_LD OFF CACHE BOOL
+    "Whether clang should call wasm-component-ld in-process when available")
+set(CLANG_IN_PROCESS_WASM_COMPONENT_LD_STATIC_LIBRARY "" CACHE FILEPATH
+    "Path to a WASI static library providing wasm_component_ld_main")
+
 option(CLANG_DEFAULT_PIE_ON_LINUX "Default to -fPIE and -pie on linux-gnu" ON)
 
 set(CLANG_DEFAULT_LINKER "" CACHE STRING
