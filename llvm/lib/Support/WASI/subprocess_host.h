@@ -53,6 +53,9 @@ typedef struct streams_stream_error_t {
 // The last operation (a write or flush) failed before completion.
 // 
 // More information is available in the `error` payload.
+// 
+// After this, the stream will be closed. All future operations return
+// `stream-error::closed`.
 #define STREAMS_STREAM_ERROR_LAST_OPERATION_FAILED 0
 // The stream is closed: no more input will be accepted by the
 // stream. A closed output-stream will return this error on all
@@ -120,6 +123,9 @@ typedef struct devenv_subprocess_types_stdin_t {
 #define DEVENV_SUBPROCESS_TYPES_STDIN_CLOSED 1
 // Provide this stream as the child's stdin.
 #define DEVENV_SUBPROCESS_TYPES_STDIN_PIPE 2
+// Request a writable pipe to the child's stdin. The parent write end is
+// available from the child resource method.
+#define DEVENV_SUBPROCESS_TYPES_STDIN_MAKE_PIPE 3
 
 typedef struct devenv_subprocess_types_output_t {
   uint8_t tag;
@@ -165,10 +171,20 @@ typedef struct {
 
 typedef struct devenv_subprocess_types_spawn_options_t {
   // Host-resolved command name or path.
+  // 
+  // This is not a registry package identifier and does not imply ambient
+  // native process access. The host may resolve it from PATH, a preopened
+  // tool set, a registry, a workspace build output, or any other
+  // policy-controlled source.
   subprocess_host_string_t   command;
   // Full WASI CLI argument list for the child, including argv[0].
+  // 
+  // The host does not prepend the command. Language adapters should populate
+  // this the same way they would populate wasi:cli/environment.get-arguments.
+  // Hosts fail spawn with an error string when this list is empty.
   subprocess_host_list_string_t   arguments;
-  // Working directory in the child's filesystem namespace.
+  // Working directory in the child's filesystem namespace. This path does
+  // not grant filesystem authority; the host-configured WASI preopens do.
   subprocess_host_option_string_t   cwd;
   // Environment additions/overrides applied to the platform-inherited child
   // environment.
@@ -208,6 +224,13 @@ typedef struct devenv_subprocess_types_borrow_child_t {
   int32_t __handle;
 } devenv_subprocess_types_borrow_child_t;
 
+typedef streams_own_output_stream_t devenv_subprocess_types_own_output_stream_t;
+
+typedef struct {
+  bool is_some;
+  devenv_subprocess_types_own_output_stream_t val;
+} devenv_subprocess_types_option_own_output_stream_t;
+
 typedef struct {
   bool is_some;
   devenv_subprocess_types_own_input_stream_t val;
@@ -232,7 +255,7 @@ typedef struct {
   } val;
 } devenv_subprocess_host_result_own_child_string_t;
 
-// Imported Functions from `wasi:io/error@0.2.0`
+// Imported Functions from `wasi:io/error@0.2.12`
 // Returns a string that is suitable to assist humans in debugging
 // this error.
 // 
@@ -242,7 +265,7 @@ typedef struct {
 // hazard.
 extern void io_error_method_error_to_debug_string(io_error_borrow_error_t self, subprocess_host_string_t *ret);
 
-// Imported Functions from `wasi:io/poll@0.2.0`
+// Imported Functions from `wasi:io/poll@0.2.12`
 // Return the readiness of a pollable. This function never blocks.
 // 
 // Returns `true` when the pollable is ready, and `false` otherwise.
@@ -261,8 +284,9 @@ extern void poll_method_pollable_block(poll_borrow_pollable_t self);
 // The result `list<u32>` contains one or more indices of handles in the
 // argument list that is ready for I/O.
 // 
-// If the list contains more elements than can be indexed with a `u32`
-// value, this function traps.
+// This function traps if either:
+// - the list is empty, or:
+// - the list contains more elements than can be indexed with a `u32` value.
 // 
 // A timeout can be implemented by adding a pollable from the
 // wasi-clocks API to the list.
@@ -270,10 +294,10 @@ extern void poll_method_pollable_block(poll_borrow_pollable_t self);
 // This function does not return a `result`; polling in itself does not
 // do any I/O so it doesn't fail. If any of the I/O sources identified by
 // the pollables has an error, it is indicated by marking the source as
-// being reaedy for I/O.
+// being ready for I/O.
 extern void poll_poll(poll_list_borrow_pollable_t *in, subprocess_host_list_u32_t *ret);
 
-// Imported Functions from `wasi:io/streams@0.2.0`
+// Imported Functions from `wasi:io/streams@0.2.12`
 // Perform a non-blocking read from the stream.
 // 
 // When the source of a `read` is binary data, the bytes from the source
@@ -346,27 +370,13 @@ extern bool streams_method_output_stream_write(streams_borrow_output_stream_t se
 // Perform a write of up to 4096 bytes, and then flush the stream. Block
 // until all of these operations are complete, or an error occurs.
 // 
-// This is a convenience wrapper around the use of `check-write`,
-// `subscribe`, `write`, and `flush`, and is implemented with the
-// following pseudo-code:
-// 
-// ```text
-// let pollable = this.subscribe();
-// while !contents.is_empty() {
-// // Wait for the stream to become writable
-// pollable.block();
-// let Ok(n) = this.check-write(); // eliding error handling
-// let len = min(n, contents.len());
-// let (chunk, rest) = contents.split_at(len);
-// this.write(chunk  );            // eliding error handling
-// contents = rest;
-// }
-// this.flush();
-// // Wait for completion of `flush`
-// pollable.block();
-// // Check for any errors that arose during `flush`
-// let _ = this.check-write();         // eliding error handling
-// ```
+// Returns success when all of the contents written are successfully
+// flushed to output. If an error occurs at any point before all
+// contents are successfully flushed, that error is returned as soon as
+// possible. If writing and flushing the complete contents causes the
+// stream to become closed, this call should return success, and
+// subsequent calls to check-write or other interfaces should return
+// stream-error::closed.
 extern bool streams_method_output_stream_blocking_write_and_flush(streams_borrow_output_stream_t self, subprocess_host_list_u8_t *contents, streams_stream_error_t *err);
 // Request to flush buffered output. This function never blocks.
 // 
@@ -383,7 +393,7 @@ extern bool streams_method_output_stream_flush(streams_borrow_output_stream_t se
 // and stream is ready for writing again.
 extern bool streams_method_output_stream_blocking_flush(streams_borrow_output_stream_t self, streams_stream_error_t *err);
 // Create a `pollable` which will resolve once the output-stream
-// is ready for more writing, or an error has occured. When this
+// is ready for more writing, or an error has occurred. When this
 // pollable is ready, `check-write` will return `ok(n)` with n>0, or an
 // error.
 // 
@@ -404,30 +414,12 @@ extern bool streams_method_output_stream_write_zeroes(streams_borrow_output_stre
 // Block until all of these operations are complete, or an error
 // occurs.
 // 
-// This is a convenience wrapper around the use of `check-write`,
-// `subscribe`, `write-zeroes`, and `flush`, and is implemented with
-// the following pseudo-code:
-// 
-// ```text
-// let pollable = this.subscribe();
-// while num_zeroes != 0 {
-// // Wait for the stream to become writable
-// pollable.block();
-// let Ok(n) = this.check-write(); // eliding error handling
-// let len = min(n, num_zeroes);
-// this.write-zeroes(len);         // eliding error handling
-// num_zeroes -= len;
-// }
-// this.flush();
-// // Wait for completion of `flush`
-// pollable.block();
-// // Check for any errors that arose during `flush`
-// let _ = this.check-write();         // eliding error handling
-// ```
+// Functionality is equivelant to `blocking-write-and-flush` with
+// contents given as a list of len containing only zeroes.
 extern bool streams_method_output_stream_blocking_write_zeroes_and_flush(streams_borrow_output_stream_t self, uint64_t len, streams_stream_error_t *err);
 // Read from one stream and write to another.
 // 
-// The behavior of splice is equivelant to:
+// The behavior of splice is equivalent to:
 // 1. calling `check-write` on the `output-stream`
 // 2. calling `read` on the `input-stream` with the smaller of the
 // `check-write` permitted length and the `len` provided to `splice`
@@ -446,20 +438,38 @@ extern bool streams_method_output_stream_splice(streams_borrow_output_stream_t s
 // is ready for reading, before performing the `splice`.
 extern bool streams_method_output_stream_blocking_splice(streams_borrow_output_stream_t self, streams_borrow_input_stream_t src, uint64_t len, uint64_t *ret, streams_stream_error_t *err);
 
-// Imported Functions from `devenv:subprocess/types@0.2.0-draft`
+// Imported Functions from `devenv:subprocess/types@0.2.0`
+// Return the child's stdin stream when stdin was configured as make-pipe.
+// 
+// The stream is taken by this call. Later calls return none. This also
+// returns none when stdin was inherited, closed, or provided as a stream.
+extern bool devenv_subprocess_types_method_child_stdin(devenv_subprocess_types_borrow_child_t self, devenv_subprocess_types_own_output_stream_t *ret);
 // Return the child's stdout stream when stdout was configured as pipe.
+// 
+// The stream is taken by this call. Later calls return none. This also
+// returns none when stdout was inherited or discarded.
 extern bool devenv_subprocess_types_method_child_stdout(devenv_subprocess_types_borrow_child_t self, devenv_subprocess_types_own_input_stream_t *ret);
 // Return the child's stderr stream when stderr was configured as pipe.
+// 
+// The stream is taken by this call. Later calls return none. This also
+// returns none when stderr was inherited or discarded.
 extern bool devenv_subprocess_types_method_child_stderr(devenv_subprocess_types_borrow_child_t self, devenv_subprocess_types_own_input_stream_t *ret);
 // Subscribe to child completion.
 extern devenv_subprocess_types_own_pollable_t devenv_subprocess_types_method_child_subscribe(devenv_subprocess_types_borrow_child_t self);
 // Return the exit status if the child has exited.
 extern bool devenv_subprocess_types_method_child_exit_status(devenv_subprocess_types_borrow_child_t self, devenv_subprocess_types_exit_status_t *ret);
 // Request best-effort child termination.
+// 
+// This method is idempotent. It does not guarantee that the child has
+// stopped; completion is observed through exit-status.
 extern void devenv_subprocess_types_method_child_terminate(devenv_subprocess_types_borrow_child_t self);
 
-// Imported Functions from `devenv:subprocess/host@0.2.0-draft`
+// Imported Functions from `devenv:subprocess/host@0.2.0`
 // Spawn a child using host-defined resolution and policy.
+// 
+// Returns an error string when no child was created. Once a child exists,
+// program failure is reported through the child's output streams and exit
+// status rather than this API.
 extern bool devenv_subprocess_host_spawn(devenv_subprocess_host_spawn_options_t *options, devenv_subprocess_host_own_child_t *ret, subprocess_host_string_t *err);
 
 // Helper Functions
@@ -519,6 +529,8 @@ void devenv_subprocess_types_exit_status_free(devenv_subprocess_types_exit_statu
 extern void devenv_subprocess_types_child_drop_own(devenv_subprocess_types_own_child_t handle);
 
 extern devenv_subprocess_types_borrow_child_t devenv_subprocess_types_borrow_child(devenv_subprocess_types_own_child_t handle);
+
+void devenv_subprocess_types_option_own_output_stream_free(devenv_subprocess_types_option_own_output_stream_t *ptr);
 
 void devenv_subprocess_types_option_own_input_stream_free(devenv_subprocess_types_option_own_input_stream_t *ptr);
 

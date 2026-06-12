@@ -3,89 +3,92 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Imported Functions from `wasi:io/error@0.2.0`
+// Imported Functions from `wasi:io/error@0.2.12`
 
-__attribute__((__import_module__("wasi:io/error@0.2.0"), __import_name__("[method]error.to-debug-string")))
+__attribute__((__import_module__("wasi:io/error@0.2.12"), __import_name__("[method]error.to-debug-string")))
 extern void __wasm_import_io_error_method_error_to_debug_string(int32_t, uint8_t *);
 
-// Imported Functions from `wasi:io/poll@0.2.0`
+// Imported Functions from `wasi:io/poll@0.2.12`
 
-__attribute__((__import_module__("wasi:io/poll@0.2.0"), __import_name__("[method]pollable.ready")))
+__attribute__((__import_module__("wasi:io/poll@0.2.12"), __import_name__("[method]pollable.ready")))
 extern int32_t __wasm_import_poll_method_pollable_ready(int32_t);
 
-__attribute__((__import_module__("wasi:io/poll@0.2.0"), __import_name__("[method]pollable.block")))
+__attribute__((__import_module__("wasi:io/poll@0.2.12"), __import_name__("[method]pollable.block")))
 extern void __wasm_import_poll_method_pollable_block(int32_t);
 
-__attribute__((__import_module__("wasi:io/poll@0.2.0"), __import_name__("poll")))
+__attribute__((__import_module__("wasi:io/poll@0.2.12"), __import_name__("poll")))
 extern void __wasm_import_poll_poll(uint8_t *, size_t, uint8_t *);
 
-// Imported Functions from `wasi:io/streams@0.2.0`
+// Imported Functions from `wasi:io/streams@0.2.12`
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]input-stream.read")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]input-stream.read")))
 extern void __wasm_import_streams_method_input_stream_read(int32_t, int64_t, uint8_t *);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]input-stream.blocking-read")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]input-stream.blocking-read")))
 extern void __wasm_import_streams_method_input_stream_blocking_read(int32_t, int64_t, uint8_t *);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]input-stream.skip")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]input-stream.skip")))
 extern void __wasm_import_streams_method_input_stream_skip(int32_t, int64_t, uint8_t *);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]input-stream.blocking-skip")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]input-stream.blocking-skip")))
 extern void __wasm_import_streams_method_input_stream_blocking_skip(int32_t, int64_t, uint8_t *);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]input-stream.subscribe")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]input-stream.subscribe")))
 extern int32_t __wasm_import_streams_method_input_stream_subscribe(int32_t);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]output-stream.check-write")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]output-stream.check-write")))
 extern void __wasm_import_streams_method_output_stream_check_write(int32_t, uint8_t *);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]output-stream.write")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]output-stream.write")))
 extern void __wasm_import_streams_method_output_stream_write(int32_t, uint8_t *, size_t, uint8_t *);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]output-stream.blocking-write-and-flush")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]output-stream.blocking-write-and-flush")))
 extern void __wasm_import_streams_method_output_stream_blocking_write_and_flush(int32_t, uint8_t *, size_t, uint8_t *);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]output-stream.flush")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]output-stream.flush")))
 extern void __wasm_import_streams_method_output_stream_flush(int32_t, uint8_t *);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]output-stream.blocking-flush")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]output-stream.blocking-flush")))
 extern void __wasm_import_streams_method_output_stream_blocking_flush(int32_t, uint8_t *);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]output-stream.subscribe")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]output-stream.subscribe")))
 extern int32_t __wasm_import_streams_method_output_stream_subscribe(int32_t);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]output-stream.write-zeroes")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]output-stream.write-zeroes")))
 extern void __wasm_import_streams_method_output_stream_write_zeroes(int32_t, int64_t, uint8_t *);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]output-stream.blocking-write-zeroes-and-flush")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]output-stream.blocking-write-zeroes-and-flush")))
 extern void __wasm_import_streams_method_output_stream_blocking_write_zeroes_and_flush(int32_t, int64_t, uint8_t *);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]output-stream.splice")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]output-stream.splice")))
 extern void __wasm_import_streams_method_output_stream_splice(int32_t, int32_t, int64_t, uint8_t *);
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[method]output-stream.blocking-splice")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[method]output-stream.blocking-splice")))
 extern void __wasm_import_streams_method_output_stream_blocking_splice(int32_t, int32_t, int64_t, uint8_t *);
 
-// Imported Functions from `devenv:subprocess/types@0.2.0-draft`
+// Imported Functions from `devenv:subprocess/types@0.2.0`
 
-__attribute__((__import_module__("devenv:subprocess/types@0.2.0-draft"), __import_name__("[method]child.stdout")))
+__attribute__((__import_module__("devenv:subprocess/types@0.2.0"), __import_name__("[method]child.stdin")))
+extern void __wasm_import_devenv_subprocess_types_method_child_stdin(int32_t, uint8_t *);
+
+__attribute__((__import_module__("devenv:subprocess/types@0.2.0"), __import_name__("[method]child.stdout")))
 extern void __wasm_import_devenv_subprocess_types_method_child_stdout(int32_t, uint8_t *);
 
-__attribute__((__import_module__("devenv:subprocess/types@0.2.0-draft"), __import_name__("[method]child.stderr")))
+__attribute__((__import_module__("devenv:subprocess/types@0.2.0"), __import_name__("[method]child.stderr")))
 extern void __wasm_import_devenv_subprocess_types_method_child_stderr(int32_t, uint8_t *);
 
-__attribute__((__import_module__("devenv:subprocess/types@0.2.0-draft"), __import_name__("[method]child.subscribe")))
+__attribute__((__import_module__("devenv:subprocess/types@0.2.0"), __import_name__("[method]child.subscribe")))
 extern int32_t __wasm_import_devenv_subprocess_types_method_child_subscribe(int32_t);
 
-__attribute__((__import_module__("devenv:subprocess/types@0.2.0-draft"), __import_name__("[method]child.exit-status")))
+__attribute__((__import_module__("devenv:subprocess/types@0.2.0"), __import_name__("[method]child.exit-status")))
 extern void __wasm_import_devenv_subprocess_types_method_child_exit_status(int32_t, uint8_t *);
 
-__attribute__((__import_module__("devenv:subprocess/types@0.2.0-draft"), __import_name__("[method]child.terminate")))
+__attribute__((__import_module__("devenv:subprocess/types@0.2.0"), __import_name__("[method]child.terminate")))
 extern void __wasm_import_devenv_subprocess_types_method_child_terminate(int32_t);
 
-// Imported Functions from `devenv:subprocess/host@0.2.0-draft`
+// Imported Functions from `devenv:subprocess/host@0.2.0`
 
-__attribute__((__import_module__("devenv:subprocess/host@0.2.0-draft"), __import_name__("spawn")))
+__attribute__((__import_module__("devenv:subprocess/host@0.2.0"), __import_name__("spawn")))
 extern void __wasm_import_devenv_subprocess_host_spawn(uint8_t *, size_t, uint8_t *, size_t, int32_t, uint8_t *, size_t, uint8_t *, size_t, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, uint8_t *);
 
 // Canonical ABI intrinsics
@@ -101,7 +104,7 @@ void *cabi_realloc(void *ptr, size_t old_size, size_t align, size_t new_size) {
 
 // Helper Functions
 
-__attribute__((__import_module__("wasi:io/error@0.2.0"), __import_name__("[resource-drop]error")))
+__attribute__((__import_module__("wasi:io/error@0.2.12"), __import_name__("[resource-drop]error")))
 extern void __wasm_import_io_error_error_drop(int32_t handle);
 
 void io_error_error_drop_own(io_error_own_error_t handle) {
@@ -112,7 +115,7 @@ io_error_borrow_error_t io_error_borrow_error(io_error_own_error_t arg) {
   return (io_error_borrow_error_t) { arg.__handle };
 }
 
-__attribute__((__import_module__("wasi:io/poll@0.2.0"), __import_name__("[resource-drop]pollable")))
+__attribute__((__import_module__("wasi:io/poll@0.2.12"), __import_name__("[resource-drop]pollable")))
 extern void __wasm_import_poll_pollable_drop(int32_t handle);
 
 void poll_pollable_drop_own(poll_own_pollable_t handle) {
@@ -151,7 +154,7 @@ void streams_stream_error_free(streams_stream_error_t *ptr) {
   }
 }
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[resource-drop]input-stream")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[resource-drop]input-stream")))
 extern void __wasm_import_streams_input_stream_drop(int32_t handle);
 
 void streams_input_stream_drop_own(streams_own_input_stream_t handle) {
@@ -162,7 +165,7 @@ streams_borrow_input_stream_t streams_borrow_input_stream(streams_own_input_stre
   return (streams_borrow_input_stream_t) { arg.__handle };
 }
 
-__attribute__((__import_module__("wasi:io/streams@0.2.0"), __import_name__("[resource-drop]output-stream")))
+__attribute__((__import_module__("wasi:io/streams@0.2.12"), __import_name__("[resource-drop]output-stream")))
 extern void __wasm_import_streams_output_stream_drop(int32_t handle);
 
 void streams_output_stream_drop_own(streams_own_output_stream_t handle) {
@@ -290,7 +293,7 @@ void devenv_subprocess_types_exit_status_free(devenv_subprocess_types_exit_statu
   }
 }
 
-__attribute__((__import_module__("devenv:subprocess/types@0.2.0-draft"), __import_name__("[resource-drop]child")))
+__attribute__((__import_module__("devenv:subprocess/types@0.2.0"), __import_name__("[resource-drop]child")))
 extern void __wasm_import_devenv_subprocess_types_child_drop(int32_t handle);
 
 void devenv_subprocess_types_child_drop_own(devenv_subprocess_types_own_child_t handle) {
@@ -299,6 +302,11 @@ void devenv_subprocess_types_child_drop_own(devenv_subprocess_types_own_child_t 
 
 devenv_subprocess_types_borrow_child_t devenv_subprocess_types_borrow_child(devenv_subprocess_types_own_child_t arg) {
   return (devenv_subprocess_types_borrow_child_t) { arg.__handle };
+}
+
+void devenv_subprocess_types_option_own_output_stream_free(devenv_subprocess_types_option_own_output_stream_t *ptr) {
+  if (ptr->is_some) {
+  }
 }
 
 void devenv_subprocess_types_option_own_input_stream_free(devenv_subprocess_types_option_own_input_stream_t *ptr) {
@@ -880,6 +888,27 @@ bool streams_method_output_stream_blocking_splice(streams_borrow_output_stream_t
   }
 }
 
+bool devenv_subprocess_types_method_child_stdin(devenv_subprocess_types_borrow_child_t self, devenv_subprocess_types_own_output_stream_t *ret) {
+  __attribute__((__aligned__(4)))
+  uint8_t ret_area[8];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  __wasm_import_devenv_subprocess_types_method_child_stdin((self).__handle, ptr);
+  devenv_subprocess_types_option_own_output_stream_t option;
+  switch ((int32_t) *((uint8_t*) (ptr + 0))) {
+    case 0: {
+      option.is_some = false;
+      break;
+    }
+    case 1: {
+      option.is_some = true;
+      option.val = (devenv_subprocess_types_own_output_stream_t) { *((int32_t*) (ptr + 4)) };
+      break;
+    }
+  }
+  *ret = option.val;
+  return option.is_some;
+}
+
 bool devenv_subprocess_types_method_child_stdout(devenv_subprocess_types_borrow_child_t self, devenv_subprocess_types_own_input_stream_t *ret) {
   __attribute__((__aligned__(4)))
   uint8_t ret_area[8];
@@ -995,91 +1024,96 @@ bool devenv_subprocess_host_spawn(devenv_subprocess_host_spawn_options_t *option
     option1 = 0;
     option2 = 0;
   }
-  int32_t option9;
   int32_t option10;
   int32_t option11;
+  int32_t option12;
   if (((*options).stdin_).is_some) {
     const devenv_subprocess_types_stdin_t *payload4 = &((*options).stdin_).val;
     int32_t variant;
-    int32_t variant8;
+    int32_t variant9;
     switch ((int32_t) (*payload4).tag) {
       case 0: {
         variant = 0;
-        variant8 = 0;
+        variant9 = 0;
         break;
       }
       case 1: {
         variant = 1;
-        variant8 = 0;
+        variant9 = 0;
         break;
       }
       case 2: {
         const devenv_subprocess_types_own_input_stream_t *payload7 = &(*payload4).val.pipe;
         variant = 2;
-        variant8 = (*payload7).__handle;
+        variant9 = (*payload7).__handle;
+        break;
+      }
+      case 3: {
+        variant = 3;
+        variant9 = 0;
         break;
       }
     }
-    option9 = 1;
-    option10 = variant;
-    option11 = variant8;
+    option10 = 1;
+    option11 = variant;
+    option12 = variant9;
   } else {
-    option9 = 0;
     option10 = 0;
     option11 = 0;
+    option12 = 0;
   }
-  int32_t option18;
   int32_t option19;
+  int32_t option20;
   if (((*options).stdout_).is_some) {
-    const devenv_subprocess_types_output_t *payload13 = &((*options).stdout_).val;
-    int32_t variant17;
-    switch ((int32_t) (*payload13).tag) {
+    const devenv_subprocess_types_output_t *payload14 = &((*options).stdout_).val;
+    int32_t variant18;
+    switch ((int32_t) (*payload14).tag) {
       case 0: {
-        variant17 = 0;
+        variant18 = 0;
         break;
       }
       case 1: {
-        variant17 = 1;
+        variant18 = 1;
         break;
       }
       case 2: {
-        variant17 = 2;
+        variant18 = 2;
         break;
       }
     }
-    option18 = 1;
-    option19 = variant17;
+    option19 = 1;
+    option20 = variant18;
   } else {
-    option18 = 0;
     option19 = 0;
+    option20 = 0;
   }
-  int32_t option26;
   int32_t option27;
+  int32_t option28;
   if (((*options).stderr_).is_some) {
-    const devenv_subprocess_types_output_t *payload21 = &((*options).stderr_).val;
-    int32_t variant25;
-    switch ((int32_t) (*payload21).tag) {
+    const devenv_subprocess_types_output_t *payload22 = &((*options).stderr_).val;
+    int32_t variant26;
+    switch ((int32_t) (*payload22).tag) {
       case 0: {
-        variant25 = 0;
+        variant26 = 0;
         break;
       }
       case 1: {
-        variant25 = 1;
+        variant26 = 1;
         break;
       }
       case 2: {
-        variant25 = 2;
+        variant26 = 2;
         break;
       }
     }
-    option26 = 1;
-    option27 = variant25;
+    option27 = 1;
+    option28 = variant26;
   } else {
-    option26 = 0;
     option27 = 0;
+    option28 = 0;
   }
   uint8_t *ptr = (uint8_t *) &ret_area;
-  __wasm_import_devenv_subprocess_host_spawn((uint8_t *) ((*options).command).ptr, ((*options).command).len, (uint8_t *) ((*options).arguments).ptr, ((*options).arguments).len, option, option1, option2, (uint8_t *) ((*options).environment).ptr, ((*options).environment).len, option9, option10, option11, option18, option19, option26, option27, ptr);
+  __wasm_import_devenv_subprocess_host_spawn((uint8_t *) ((*options).command).ptr, ((*options).command).len, (uint8_t *) ((*options).arguments).ptr, ((*options).arguments).len, option, option1, option2, (uint8_t *) ((*options).environment).ptr, ((*options).environment).len, option10, option11, option12, option19, option20, option27, option28, ptr);
   devenv_subprocess_host_result_own_child_string_t result;
   switch ((int32_t) *((uint8_t*) (ptr + 0))) {
     case 0: {
