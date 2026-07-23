@@ -123,21 +123,7 @@ ProcessInfo::ProcessInfo() : Pid(0), Process(0), ReturnCode(0) {}
 #include <cstring>
 #include <spawn.h>
 #include <unistd.h>
-#if defined(_WASI_EMULATED_SIGNAL)
-// wasi-libc's <sys/wait.h> declares waitid(siginfo_t *) when
-// _WASI_EMULATED_SIGNAL is defined, but on WASI <signal.h> only defines
-// siginfo_t under __wasilibc_unmodified_upstream, so that combination
-// does not compile against the current setouthq wasi-libc pin
-// (wasip2-subprocess-0.4.3 @ f0b54b87). Nothing here uses emulated
-// signals; drop the macro around the include until the libc guard is
-// fixed upstream-of-here.
-#pragma push_macro("_WASI_EMULATED_SIGNAL")
-#undef _WASI_EMULATED_SIGNAL
 #include <sys/wait.h>
-#pragma pop_macro("_WASI_EMULATED_SIGNAL")
-#else
-#include <sys/wait.h>
-#endif
 
 extern char **environ;
 #endif // defined(LLVM_WASI_ENABLE_SUBPROCESS)
