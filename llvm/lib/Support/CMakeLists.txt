@@ -137,24 +137,15 @@ endif()
 add_subdirectory(BLAKE3)
 add_subdirectory(LSP)
 
+# Spawn support for WASI-hosted LLVM tools. No sources are added: the
+# implementation in Program.cpp calls wasi-libc's posix_spawnp/waitpid,
+# which the setouthq wasi-libc subprocess sysroot flavor provides over
+# devenv:subprocess@0.4.3 (link against that flavor when enabling this).
+# The guard is compile-time only (#if __wasi__), so the option is inert
+# for any non-WASI target.
 option(LLVM_WASI_ENABLE_SUBPROCESS
   "Enable devenv:subprocess p2 process spawning for WASI-hosted LLVM tools"
   OFF)
-
-set(wasi_subprocess_sources)
-if(LLVM_WASI_ENABLE_SUBPROCESS)
-  if(NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
-    message(FATAL_ERROR
-      "LLVM_WASI_ENABLE_SUBPROCESS is only supported for WASI-hosted builds")
-  endif()
-
-  set(wasi_subprocess_component_type WASI/subprocess_host_component_type.o)
-  set_source_files_properties(${wasi_subprocess_component_type}
-    PROPERTIES EXTERNAL_OBJECT TRUE)
-  list(APPEND wasi_subprocess_sources
-    WASI/subprocess_host.c
-    ${wasi_subprocess_component_type})
-endif()
 
 add_llvm_component_library(LLVMSupport
   ABIBreak.cpp
@@ -317,7 +308,6 @@ add_llvm_component_library(LLVMSupport
 
   ${ALLOCATOR_FILES}
   $<TARGET_OBJECTS:LLVMSupportBlake3>
-  ${wasi_subprocess_sources}
 
 # System
   Atomic.cpp
