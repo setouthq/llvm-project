@@ -5369,8 +5369,19 @@ void Driver::BuildJobs(Compilation &C) const {
   // statistics.
   if ((C.getJobs().size() > 1 && !CanRunTwoJobPipelineInProcess()) ||
       CCPrintProcessStats)
-    for (auto &J : C.getJobs())
+    for (auto &J : C.getJobs()) {
+      // Link jobs backed by the in-process wasm linker hooks stay
+      // in-process regardless of how many cc1 jobs spawn around them:
+      // exactly one link runs per driver invocation, the same envelope
+      // the two-job pipeline above already allows. Without this, an
+      // N-translation-unit compile+link on a WASI host would try to
+      // spawn `wasm-component-ld`/`wasm-ld` as real subprocesses, which
+      // no session registers.
+      if (!CCPrintProcessStats && J.getCreator().isLinkJob() &&
+          (WasmLdMain || WasmComponentLdMain))
+        continue;
       J.InProcess = false;
+    }
 
   if (CCPrintProcessStats) {
     C.setPostCallback([=](const Command &Cmd, int Res) {
