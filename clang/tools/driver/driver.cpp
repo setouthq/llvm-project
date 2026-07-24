@@ -60,10 +60,41 @@ LLD_HAS_DRIVER(wasm)
 #include <optional>
 #include <set>
 #include <system_error>
+#ifdef __wasi__
+#include <cstdlib>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 using namespace clang;
 using namespace clang::driver;
 using namespace llvm::opt;
+
+#ifdef __wasi__
+/// Adopt the session-injected working directory (the devenv platform
+/// contract, mirrored from the ported ninja/CMake/smokedrv startup recipe):
+/// wasi-libc processes start at "/" and never consult the host-advertised
+/// cwd on their own; the host communicates it via PWD. Only the
+/// session-injection shape is adopted -- PWD set to an absolute path while
+/// the process cwd is still "/" -- so an explicitly inherited cwd, or a
+/// plain-wasmtime run without PWD, is left untouched. `-working-directory`
+/// continues to win when passed: it overrides path resolution inside the
+/// driver regardless of the process cwd. The mkdir fallback materializes a
+/// workspace directory that so far exists only virtually in a fresh VFS
+/// checkout (the proven wasi-libc recipe carries the same fallback).
+static void AdoptSessionWorkingDirectory() {
+  const char *Pwd = ::getenv("PWD");
+  if (!Pwd || Pwd[0] != '/' || Pwd[1] == '\0')
+    return;
+  char Cwd[256];
+  if (!::getcwd(Cwd, sizeof(Cwd)) || Cwd[0] != '/' || Cwd[1] != '\0')
+    return;
+  if (::chdir(Pwd) != 0) {
+    ::mkdir(Pwd, 0777);
+    (void)::chdir(Pwd);
+  }
+}
+#endif
 
 #if CLANG_ENABLE_IN_PROCESS_WASM_LD
 static int ExecuteInProcessWasmLd(SmallVectorImpl<const char *> &ArgV) {
@@ -273,6 +304,11 @@ static int ExecuteCC1Tool(SmallVectorImpl<const char *> &ArgV,
 }
 
 int clang_main(int Argc, char **Argv, const llvm::ToolContext &ToolContext) {
+#ifdef __wasi__
+  // Before any path touches the filesystem (including -cc1 dispatch and
+  // response-file expansion below): adopt the session cwd.
+  AdoptSessionWorkingDirectory();
+#endif
   noteBottomOfStack();
   llvm::setBugReportMsg("PLEASE submit a bug report to " BUG_REPORT_URL
                         " and include the crash backtrace, preprocessed "
