@@ -5347,9 +5347,20 @@ void Driver::BuildJobs(Compilation &C) const {
 
   // If we have more than one job, then disable integrated-cc1 for now. Do this
   // also when we need to report process execution statistics.
+  //
+  // Not on WASI: there is no process spawning at all (sys::ExecuteAndWait is
+  // a stub that always fails), so in-process execution is the only way any
+  // CC1Command can run. Multi-job compilations (e.g. a .S file's preprocess
+  // job followed by its -cc1as assemble job) keep their in-process flag and
+  // execute sequentially through Driver::CC1Main; ExecuteCC1Tool resets
+  // global option state on every entry, and CC_PRINT_PROC_STAT reports
+  // nothing for in-process jobs (getProcessStatistics stays empty) exactly
+  // as it does for a single in-process job elsewhere.
+#if !defined(__wasi__)
   if (C.getJobs().size() > 1 || CCPrintProcessStats)
     for (auto &J : C.getJobs())
       J.InProcess = false;
+#endif
 
   if (CCPrintProcessStats) {
     C.setPostCallback([=](const Command &Cmd, int Res) {
