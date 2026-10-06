@@ -396,8 +396,8 @@ bool llvm::sys::RemoveFileOnSignal(StringRef, std::string *) { return false; }
 
 void llvm::sys::DontRemoveFileOnSignal(StringRef) {}
 
-void llvm::sys::AddSignalHandler(sys::SignalHandlerCallback FnPtr,
-                                 void *Cookie) {
+void llvm::sys::AddSignalHandler(sys::SignalHandlerCallback FnPtr, void *Cookie,
+                                 bool NeedsPOSIXUtilitySignalHandling) {
   insertSignalHandler(FnPtr, Cookie);
 }
 

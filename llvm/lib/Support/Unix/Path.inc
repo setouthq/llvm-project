@@ -962,7 +962,7 @@ void mapped_file_region::randomAccessImpl() {
   assert(Mode == mapped_file_region::readonly);
   if (!Mapping)
     return;
-#if defined(__MVS__) || defined(_AIX)
+#if defined(__MVS__) || defined(_AIX) || defined(__wasi__)
   // If we don't have madvise, or it isn't beneficial, treat this as a no-op.
 #elif defined(POSIX_MADV_RANDOM)
   ::posix_madvise(Mapping, Size, POSIX_MADV_RANDOM);

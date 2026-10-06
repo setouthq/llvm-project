@@ -255,7 +255,8 @@ bool CrashRecoveryContext::RunSafely(function_ref<void()> Fn) {
 
 #if defined(__wasi__)
 
-static void installExceptionOrSignalHandlers() {}
+static void
+installExceptionOrSignalHandlers(bool NeedsPOSIXUtilitySignalHandling) {}
 static void uninstallExceptionOrSignalHandlers() {}
 
 #elif defined(_WIN32)
