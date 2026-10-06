@@ -17,7 +17,9 @@
 
 #if __has_include(<sys/file.h>)
 #include <sys/file.h>
-#ifdef LOCK_SH
+// wasi-libc declares flock() and LOCK_SH, but no WASI sysroot library
+// defines flock(), so WASI takes the no-flock path.
+#if defined(LOCK_SH) && !defined(__wasi__)
 #define HAVE_FLOCK 1
 #else
 #define HAVE_FLOCK 0
