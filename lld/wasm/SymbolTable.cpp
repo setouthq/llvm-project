@@ -112,6 +112,7 @@ void SymbolTable::compileBitcodeFiles() {
 
   for (auto &file : lto->compile()) {
     auto *obj = cast<ObjFile>(file);
+    obj->fromLTO = true;
     obj->parse(true);
     ctx.objectFiles.push_back(obj);
   }

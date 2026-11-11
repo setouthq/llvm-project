@@ -118,6 +118,9 @@ public:
   const WasmSection *codeSection = nullptr;
   const WasmSection *dataSection = nullptr;
 
+  // True for an object that LTO compiled from bitcode files.
+  bool fromLTO = false;
+
   // Maps input type indices to output type indices
   std::vector<uint32_t> typeMap;
   std::vector<bool> typeIsUsed;
