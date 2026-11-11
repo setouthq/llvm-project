@@ -82,6 +82,41 @@ static void addGOTEntry(Symbol *sym) {
     out.globalSec->addInternalGOTEntry(sym);
 }
 
+// A TLS relocation (R_WASM_MEMORY_ADDR_TLS_SLEB{,64}) resolves to the offset
+// of a TLS symbol from __tls_base, and the code adds __tls_base to it at run
+// time.  A symbol that is not TLS has no such offset: the relocation would get
+// the symbol's address and the access would land at __tls_base plus that
+// address.  That holds in single-threaded links too, where __tls_base is the
+// start of the .tdata segment (or of the data when there is none), so this is
+// an error in every link.  The usual cause is an object compiled with
+// thread-local storage (-pthread, or the atomics and bulk-memory features)
+// using a thread_local variable from an object compiled without it, where the
+// compiler lowers thread_local to an ordinary global: C's errno, declared
+// `extern _Thread_local int errno` and defined by a libc built without
+// threads, is one.
+static void reportNonTLSSymbol(const ObjFile *file, const WasmRelocation &reloc,
+                               const Symbol *sym) {
+  std::string use = toString(file);
+  std::string def = toString(sym->getFile());
+  std::string name = toString(*sym);
+  std::string why = use + " reaches `" + name +
+                    "` as a thread-local (compiled with -pthread, or with "
+                    "atomics and bulk-memory), but " +
+                    def +
+                    " defines it as an ordinary global (compiled without "
+                    "them, or not declared thread_local)";
+  std::string fix = ctx.arg.isMultithreaded()
+                        ? "compile " + def +
+                              " with the same threading flags as " + use +
+                              ", with `" + name + "` declared thread_local"
+                        : "this link is single-threaded (no --shared-memory or "
+                          "--cooperative-threading): compile " +
+                              use + " without -pthread";
+  error(use + ": relocation " + relocTypeToString(reloc.Type) +
+        " cannot be used against non-TLS symbol `" + name +
+        "`\n>>> defined in " + def + "\n>>> " + why + "\n>>> " + fix);
+}
+
 void scanRelocations(InputChunk *chunk) {
   if (!chunk->live)
     return;
@@ -121,17 +156,13 @@ void scanRelocations(InputChunk *chunk) {
         error(toString(file) + ": relocation " + relocTypeToString(reloc.Type) +
               " cannot be used against an undefined symbol `" + toString(*sym) +
               "`");
+      } else if (!sym->isTLS()) {
+        reportNonTLSSymbol(file, reloc, sym);
       }
       // In single-threaded builds TLS is lowered away and TLS data can be
       // merged with normal data and allowing TLS relocation in non-TLS
       // segments.
       if (ctx.arg.isMultithreaded()) {
-        if (!sym->isTLS()) {
-          error(toString(file) + ": relocation " +
-                relocTypeToString(reloc.Type) +
-                " cannot be used against non-TLS symbol `" + toString(*sym) +
-                "`");
-        }
         if (auto *D = dyn_cast<DefinedData>(sym)) {
           if (!D->segment->outputSeg->isTLS()) {
             error(toString(file) + ": relocation " +
