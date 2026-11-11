@@ -982,15 +982,17 @@ static void finalizeIndirectFunctionTable() {
 }
 
 static void scanRelocations() {
+  SmallVector<NonTLSRelocation, 0> nonTLS;
   for (ObjFile *file : ctx.objectFiles) {
     LLVM_DEBUG(dbgs() << "scanRelocations: " << file->getName() << "\n");
     for (InputChunk *chunk : file->functions)
-      scanRelocations(chunk);
+      scanRelocations(chunk, nonTLS);
     for (InputChunk *chunk : file->segments)
-      scanRelocations(chunk);
+      scanRelocations(chunk, nonTLS);
     for (auto &p : file->customSections)
-      scanRelocations(p);
+      scanRelocations(p, nonTLS);
   }
+  reportNonTLSRelocations(nonTLS);
 }
 
 void Writer::assignIndexes() {

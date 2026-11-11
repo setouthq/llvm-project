@@ -12,6 +12,7 @@
 #include "OutputSegment.h"
 #include "SymbolTable.h"
 #include "SyntheticSections.h"
+#include "llvm/ADT/MapVector.h"
 
 using namespace llvm;
 using namespace llvm::wasm;
@@ -82,42 +83,85 @@ static void addGOTEntry(Symbol *sym) {
     out.globalSec->addInternalGOTEntry(sym);
 }
 
+// Whether the compiler lowered thread-local storage or atomics away in this
+// object, because it was compiled without atomics or bulk-memory.  It marks
+// such an object as disallowing shared memory.
+static bool strippedThreadLocals(const ObjFile *file) {
+  return llvm::any_of(file->getWasmObj()->getTargetFeatures(),
+                      [](const WasmFeatureEntry &f) {
+                        return f.Prefix == WASM_FEATURE_PREFIX_DISALLOWED &&
+                               f.Name == "shared-mem";
+                      });
+}
+
 // A TLS relocation (R_WASM_MEMORY_ADDR_TLS_SLEB{,64}) resolves to the offset
 // of a TLS symbol from __tls_base, and the code adds __tls_base to it at run
 // time.  A symbol that is not TLS has no such offset: the relocation would get
 // the symbol's address and the access would land at __tls_base plus that
 // address.  That holds in single-threaded links too, where __tls_base is the
 // start of the .tdata segment (or of the data when there is none), so this is
-// an error in every link.  The usual cause is an object compiled with
-// thread-local storage (-pthread, or the atomics and bulk-memory features)
-// using a thread_local variable from an object compiled without it, where the
+// an error in every final link.  The usual cause is code compiled with
+// thread-local storage (-pthread, or atomics and bulk-memory) using a
+// thread_local variable defined by an object compiled without it, where the
 // compiler lowers thread_local to an ordinary global: C's errno, declared
 // `extern _Thread_local int errno` and defined by a libc built without
-// threads, is one.
-static void reportNonTLSSymbol(const ObjFile *file, const WasmRelocation &reloc,
-                               const Symbol *sym) {
-  std::string use = toString(file);
-  std::string def = toString(sym->getFile());
-  std::string name = toString(*sym);
-  std::string why = use + " reaches `" + name +
-                    "` as a thread-local (compiled with -pthread, or with "
-                    "atomics and bulk-memory), but " +
-                    def +
-                    " defines it as an ordinary global (compiled without "
-                    "them, or not declared thread_local)";
-  std::string fix = ctx.arg.isMultithreaded()
-                        ? "compile " + def +
-                              " with the same threading flags as " + use +
-                              ", with `" + name + "` declared thread_local"
-                        : "this link is single-threaded (no --shared-memory or "
-                          "--cooperative-threading): compile " +
-                              use + " without -pthread";
-  error(use + ": relocation " + relocTypeToString(reloc.Type) +
-        " cannot be used against non-TLS symbol `" + name +
-        "`\n>>> defined in " + def + "\n>>> " + why + "\n>>> " + fix);
+// threads, is one.  LTO is another: a module that defines no functions has no
+// target features of its own, so unless --shared-memory adds atomics
+// (createConfig in LTO.cpp) LTO compiles it without them and its thread_local
+// variables become ordinary globals.
+void reportNonTLSRelocations(ArrayRef<NonTLSRelocation> nonTLS) {
+  MapVector<const Symbol *, SmallVector<const NonTLSRelocation *, 0>> bySym;
+  for (const NonTLSRelocation &r : nonTLS)
+    bySym[r.sym].push_back(&r);
+
+  for (auto &[sym, refs] : bySym) {
+    std::string msg = "relocation ";
+    msg += relocTypeToString(refs.front()->type);
+    msg += " cannot be used against non-TLS symbol `" + toString(*sym) +
+           "`\n>>> defined in " + toString(sym->getFile());
+
+    // Up to three places that reference it, then how many references remain.
+    SmallVector<const InputChunk *, 3> shown;
+    size_t rest = 0;
+    for (const NonTLSRelocation *r : refs) {
+      if (llvm::is_contained(shown, r->chunk))
+        continue;
+      if (shown.size() == 3) {
+        ++rest;
+        continue;
+      }
+      shown.push_back(r->chunk);
+      msg += "\n>>> referenced by " + toString(r->chunk);
+    }
+    if (rest)
+      msg += "\n>>> referenced " + std::to_string(rest) + " more time" +
+             (rest == 1 ? "" : "s");
+
+    msg += "\n>>> the references are thread-local; the definition is not";
+    const auto *def = dyn_cast_or_null<ObjFile>(sym->getFile());
+    bool stripped = def && strippedThreadLocals(def);
+    if (stripped && def->fromLTO && def->functions.empty() &&
+        !ctx.arg.isMultithreaded()) {
+      msg += "\n>>> LTO dropped thread_local: it compiles a module with no "
+             "functions without atomics";
+      msg += "\n>>> use full LTO, or link with --shared-memory (clang's "
+             "-pthread)";
+    } else {
+      msg += stripped ? "\n>>> the definition was compiled without atomics or "
+                        "bulk-memory, which drops thread_local"
+                      : "\n>>> the definition does not declare it thread_local";
+      msg += ctx.arg.isMultithreaded()
+                 ? "\n>>> define it as thread_local, with the same threading "
+                   "flags as the references"
+                 : "\n>>> this link is single-threaded: compile the references "
+                   "without -pthread";
+    }
+    error(msg);
+  }
 }
 
-void scanRelocations(InputChunk *chunk) {
+void scanRelocations(InputChunk *chunk,
+                     SmallVectorImpl<NonTLSRelocation> &nonTLS) {
   if (!chunk->live)
     return;
   ObjFile *file = chunk->file;
@@ -157,12 +201,15 @@ void scanRelocations(InputChunk *chunk) {
               " cannot be used against an undefined symbol `" + toString(*sym) +
               "`");
       } else if (!sym->isTLS()) {
-        reportNonTLSSymbol(file, reloc, sym);
-      }
-      // In single-threaded builds TLS is lowered away and TLS data can be
-      // merged with normal data and allowing TLS relocation in non-TLS
-      // segments.
-      if (ctx.arg.isMultithreaded()) {
+        // Reported after the scan, one error per symbol.  A single-threaded
+        // relocatable link keeps the relocation, and the final link checks it
+        // against the definition it picks.
+        if (!ctx.arg.relocatable || ctx.arg.isMultithreaded())
+          nonTLS.push_back({chunk, sym, reloc.Type});
+      } else if (ctx.arg.isMultithreaded()) {
+        // In single-threaded builds TLS is lowered away and TLS data can be
+        // merged with normal data and allowing TLS relocation in non-TLS
+        // segments.
         if (auto *D = dyn_cast<DefinedData>(sym)) {
           if (!D->segment->outputSeg->isTLS()) {
             error(toString(file) + ": relocation " +
