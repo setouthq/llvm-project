@@ -185,6 +185,31 @@ class DwarfCompileUnit final : public DwarfUnit {
                            const MachineLocation &Location,
                            ArrayRef<uint64_t> Expr);
 
+  /// Lexical scopes waiting for their DIEs, each with the DIE its entities go
+  /// into. The scope tree is walked with this explicit stack rather than by
+  /// recursion, so that deeply nested scopes do not exhaust the native stack.
+  using ScopeWorkList = SmallVectorImpl<std::pair<LexicalScope *, DIE *>>;
+
+  /// Whether \p S gets no DIE of its own, its children going into the DIE of
+  /// its parent instead.
+  bool skipLexicalScope(LexicalScope *S);
+
+  /// Add the arguments, local variables and labels of \p Scope to \p ScopeDIE
+  /// and queue its child scopes on \p WorkList.
+  /// \returns the object pointer variable's DIE, if there is one.
+  DIE *addScopeEntitiesAndQueueChildren(LexicalScope *Scope, DIE &ScopeDIE,
+                                        ScopeWorkList &WorkList);
+
+  /// Construct the DIE of \p Scope under \p ParentScopeDIE, if it gets one,
+  /// add its entities and queue its child scopes on \p WorkList.
+  void constructScopeDIEAndQueueChildren(LexicalScope *Scope,
+                                         DIE &ParentScopeDIE,
+                                         ScopeWorkList &WorkList);
+
+  /// Construct the DIEs of the scopes queued on \p WorkList and of everything
+  /// nested in them, in the order a depth-first walk would.
+  void constructQueuedScopeDIEs(ScopeWorkList &WorkList);
+
 public:
   DwarfCompileUnit(unsigned UID, const DICompileUnit *Node, AsmPrinter *A,
                    DwarfDebug *DW, DwarfFile *DWU,

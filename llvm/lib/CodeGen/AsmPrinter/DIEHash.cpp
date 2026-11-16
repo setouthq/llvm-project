@@ -365,31 +365,53 @@ void DIEHash::hashNestedType(const DIE &Die, StringRef Name) {
 // Compute the hash of a DIE. This is based on the type signature computation
 // given in section 7.27 of the DWARF4 standard. It is the md5 hash of a
 // flattened description of the DIE.
-void DIEHash::computeHash(const DIE &Die) {
-  // Append the letter 'D', followed by the DWARF tag of the DIE.
-  addULEB128('D');
-  addULEB128(Die.getTag());
+void DIEHash::computeHash(const DIE &TopDie) {
+  // The DIEs whose children are being hashed, each with its next child. The
+  // children are walked with this explicit stack rather than by recursion, so
+  // that deeply nested DIEs (such as lexical blocks) do not exhaust the native
+  // stack; the hashing order is that of a recursive depth-first walk. A DIE
+  // referenced from an attribute is still hashed by a nested call, from
+  // addAttributes, as before.
+  SmallVector<std::pair<const DIE *, DIE::const_child_iterator>, 16> Parents;
+  const DIE *Die = &TopDie;
+  while (true) {
+    // Append the letter 'D', followed by the DWARF tag of the DIE.
+    addULEB128('D');
+    addULEB128(Die->getTag());
 
-  // Add each of the attributes of the DIE.
-  addAttributes(Die);
+    // Add each of the attributes of the DIE.
+    addAttributes(*Die);
 
-  // Then hash each of the children of the DIE.
-  for (const auto &C : Die.children()) {
-    // 7.27 Step 7
-    // If C is a nested type entry or a member function entry, ...
-    if (isType(C.getTag()) || (C.getTag() == dwarf::DW_TAG_subprogram && isType(C.getParent()->getTag()))) {
-      StringRef Name = getDIEStringAttr(C, dwarf::DW_AT_name);
-      // ... and has a DW_AT_name attribute
-      if (!Name.empty()) {
-        hashNestedType(C, Name);
+    // Then hash each of the children of the DIE.
+    Parents.emplace_back(Die, Die->children().begin());
+    Die = nullptr;
+    while (!Parents.empty()) {
+      auto &[Parent, Next] = Parents.back();
+      if (Next == Parent->children().end()) {
+        // Following the last (or if there are no children), append a zero
+        // byte.
+        Hash.update(ArrayRef((uint8_t)'\0'));
+        Parents.pop_back();
         continue;
       }
+      const DIE &C = *Next;
+      ++Next;
+      // 7.27 Step 7
+      // If C is a nested type entry or a member function entry, ...
+      if (isType(C.getTag()) || (C.getTag() == dwarf::DW_TAG_subprogram && isType(C.getParent()->getTag()))) {
+        StringRef Name = getDIEStringAttr(C, dwarf::DW_AT_name);
+        // ... and has a DW_AT_name attribute
+        if (!Name.empty()) {
+          hashNestedType(C, Name);
+          continue;
+        }
+      }
+      Die = &C;
+      break;
     }
-    computeHash(C);
+    if (!Die)
+      return;
   }
-
-  // Following the last (or if there are no children), append a zero byte.
-  Hash.update(ArrayRef((uint8_t)'\0'));
 }
 
 /// This is based on the type signature computation given in section 7.27 of the

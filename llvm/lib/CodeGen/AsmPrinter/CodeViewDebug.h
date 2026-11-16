@@ -438,7 +438,8 @@ private:
   void emitLexicalBlockList(ArrayRef<LexicalBlock *> Blocks,
                             const FunctionInfo& FI);
 
-  /// Emit a lexical block scope and its children.
+  /// Emit the record that opens a lexical block scope, and its variables.
+  /// emitLexicalBlockList emits the children and the closing record.
   void emitLexicalBlock(const LexicalBlock &Block, const FunctionInfo& FI);
 
   /// Translates the DIType to codeview if necessary and returns a type index

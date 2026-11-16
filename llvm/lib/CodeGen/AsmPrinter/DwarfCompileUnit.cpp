@@ -589,6 +589,13 @@ DIE &DwarfCompileUnit::updateSubprogramScopeDIE(const DISubprogram *SP,
 // Construct a DIE for this scope.
 void DwarfCompileUnit::constructScopeDIE(LexicalScope *Scope,
                                          DIE &ParentScopeDIE) {
+  SmallVector<std::pair<LexicalScope *, DIE *>, 8> WorkList;
+  constructScopeDIEAndQueueChildren(Scope, ParentScopeDIE, WorkList);
+  constructQueuedScopeDIEs(WorkList);
+}
+
+void DwarfCompileUnit::constructScopeDIEAndQueueChildren(
+    LexicalScope *Scope, DIE &ParentScopeDIE, ScopeWorkList &WorkList) {
   if (!Scope || !Scope->getScopeNode())
     return;
 
@@ -603,7 +610,7 @@ void DwarfCompileUnit::constructScopeDIE(LexicalScope *Scope,
   if (Scope->getParent() && isa<DISubprogram>(DS)) {
     DIE *ScopeDIE = constructInlinedScopeDIE(Scope, ParentScopeDIE);
     assert(ScopeDIE && "Scope DIE should not be null.");
-    createAndAddScopeChildren(Scope, *ScopeDIE);
+    addScopeEntitiesAndQueueChildren(Scope, *ScopeDIE, WorkList);
     return;
   }
 
@@ -615,7 +622,7 @@ void DwarfCompileUnit::constructScopeDIE(LexicalScope *Scope,
   DIE *ScopeDIE = getOrCreateLexicalBlockDIE(Scope, ParentScopeDIE);
   assert(ScopeDIE && "Scope DIE should not be null.");
 
-  createAndAddScopeChildren(Scope, *ScopeDIE);
+  addScopeEntitiesAndQueueChildren(Scope, *ScopeDIE, WorkList);
 }
 
 void DwarfCompileUnit::addScopeRangeList(DIE &ScopeDIE,
@@ -1232,6 +1239,48 @@ bool DwarfCompileUnit::hasGlobalVariableInScope(const DILocalScope *ScopeNode) {
 
 DIE *DwarfCompileUnit::createAndAddScopeChildren(LexicalScope *Scope,
                                                  DIE &ScopeDIE) {
+  SmallVector<std::pair<LexicalScope *, DIE *>, 8> WorkList;
+  DIE *ObjectPointer =
+      addScopeEntitiesAndQueueChildren(Scope, ScopeDIE, WorkList);
+  constructQueuedScopeDIEs(WorkList);
+  return ObjectPointer;
+}
+
+void DwarfCompileUnit::constructQueuedScopeDIEs(ScopeWorkList &WorkList) {
+  // A scope's children are queued last first, so the next scope taken is its
+  // first child, and a subtree is finished before its next sibling is taken:
+  // the order of a recursive depth-first walk, whose depth would follow the
+  // nesting of the scopes.
+  while (!WorkList.empty()) {
+    auto [LS, ParentDIE] = WorkList.pop_back_val();
+    // If the lexical block doesn't have non-scope children or global
+    // variables scoped to it, skip its emission and put its children directly
+    // to the parent scope.
+    if (skipLexicalScope(LS))
+      addScopeEntitiesAndQueueChildren(LS, *ParentDIE, WorkList);
+    else
+      constructScopeDIEAndQueueChildren(LS, *ParentDIE, WorkList);
+  }
+}
+
+bool DwarfCompileUnit::skipLexicalScope(LexicalScope *S) {
+  if (isa<DISubprogram>(S->getScopeNode()))
+    return false;
+  // Don't skip abstract lexical blocks that are scope targets for global
+  // variables (e.g., function-scope statics). Those globals are emitted
+  // later in endModule() and need to find the block via
+  // getOrCreateContextDIE().
+  if (S->isAbstractScope() && hasGlobalVariableInScope(S->getScopeNode()))
+    return false;
+  auto Vars = DU->getScopeVariables().lookup(S);
+  if (!Vars.Args.empty() || !Vars.Locals.empty())
+    return false;
+  return includeMinimalInlineScopes() ||
+         DD->getLocalDeclsForScope(S->getScopeNode()).empty();
+}
+
+DIE *DwarfCompileUnit::addScopeEntitiesAndQueueChildren(
+    LexicalScope *Scope, DIE &ScopeDIE, ScopeWorkList &WorkList) {
   DIE *ObjectPointer = nullptr;
 
   // Emit function arguments (order is significant).
@@ -1256,31 +1305,10 @@ DIE *DwarfCompileUnit::createAndAddScopeChildren(LexicalScope *Scope,
     DeferredLocalDecls.insert_range(LocalDecls);
   }
 
-  // Emit inner lexical scopes.
-  auto skipLexicalScope = [this](LexicalScope *S) -> bool {
-    if (isa<DISubprogram>(S->getScopeNode()))
-      return false;
-    // Don't skip abstract lexical blocks that are scope targets for global
-    // variables (e.g., function-scope statics). Those globals are emitted
-    // later in endModule() and need to find the block via
-    // getOrCreateContextDIE().
-    if (S->isAbstractScope() && hasGlobalVariableInScope(S->getScopeNode()))
-      return false;
-    auto Vars = DU->getScopeVariables().lookup(S);
-    if (!Vars.Args.empty() || !Vars.Locals.empty())
-      return false;
-    return includeMinimalInlineScopes() ||
-           DD->getLocalDeclsForScope(S->getScopeNode()).empty();
-  };
-  for (LexicalScope *LS : Scope->getChildren()) {
-    // If the lexical block doesn't have non-scope children or global
-    // variables scoped to it, skip its emission and put its children directly
-    // to the parent scope.
-    if (skipLexicalScope(LS))
-      createAndAddScopeChildren(LS, ScopeDIE);
-    else
-      constructScopeDIE(LS, ScopeDIE);
-  }
+  // Queue inner lexical scopes, last first, so that constructQueuedScopeDIEs
+  // takes them in order.
+  for (LexicalScope *LS : llvm::reverse(Scope->getChildren()))
+    WorkList.emplace_back(LS, &ScopeDIE);
 
   return ObjectPointer;
 }
@@ -1922,23 +1950,32 @@ void DwarfCompileUnit::createBaseTypeDIEs() {
 }
 
 DIE *DwarfCompileUnit::getLocalContextDIE(const DILexicalBlock *LB) {
-  // Assume if there is an abstract tree all the DIEs are already emitted.
-  bool isAbstract = getAbstractScopeDIEs().count(LB->getSubprogram());
-  if (isAbstract) {
-    auto &DIEs = getAbstractScopeDIEs();
-    if (auto It = DIEs.find(LB); It != DIEs.end())
+  // Each enclosing lexical block without a DIE is one more step of this loop
+  // (rather than of a recursion through getOrCreateContextDIE).
+  while (true) {
+    // Assume if there is an abstract tree all the DIEs are already emitted.
+    bool isAbstract = getAbstractScopeDIEs().count(LB->getSubprogram());
+    if (isAbstract) {
+      auto &DIEs = getAbstractScopeDIEs();
+      if (auto It = DIEs.find(LB); It != DIEs.end())
+        return It->second;
+    }
+    assert(!isAbstract && "Missed lexical block DIE in abstract tree!");
+
+    // Check if we have a concrete DIE.
+    if (auto It = LexicalBlockDIEs.find(LB); It != LexicalBlockDIEs.end())
       return It->second;
+
+    // If nothing available found, we cannot just create a new lexical block,
+    // because it isn't known where to put it into the DIE tree.
+    // So, we may only try to find the most close avaiable parent DIE.
+    const DILocalScope *Parent = LB->getScope()->getNonLexicalBlockFileScope();
+    if (auto *ParentLB = dyn_cast<DILexicalBlock>(Parent)) {
+      LB = ParentLB;
+      continue;
+    }
+    return getOrCreateContextDIE(Parent);
   }
-  assert(!isAbstract && "Missed lexical block DIE in abstract tree!");
-
-  // Check if we have a concrete DIE.
-  if (auto It = LexicalBlockDIEs.find(LB); It != LexicalBlockDIEs.end())
-    return It->second;
-
-  // If nothing available found, we cannot just create a new lexical block,
-  // because it isn't known where to put it into the DIE tree.
-  // So, we may only try to find the most close avaiable parent DIE.
-  return getOrCreateContextDIE(LB->getScope()->getNonLexicalBlockFileScope());
 }
 
 DIE *DwarfCompileUnit::getOrCreateContextDIE(const DIScope *Context) {

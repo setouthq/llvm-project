@@ -299,38 +299,58 @@ void AsmPrinter::emitCFIInstruction(const MCCFIInstruction &Inst) const {
   }
 }
 
-void AsmPrinter::emitDwarfDIE(const DIE &Die) const {
-  // Emit the code (index) for the abbreviation.
-  if (isVerbose())
-    OutStreamer->AddComment("Abbrev [" + Twine(Die.getAbbrevNumber()) + "] 0x" +
-                            Twine::utohexstr(Die.getOffset()) + ":0x" +
-                            Twine::utohexstr(Die.getSize()) + " " +
-                            dwarf::TagString(Die.getTag()));
-  emitULEB128(Die.getAbbrevNumber());
+void AsmPrinter::emitDwarfDIE(const DIE &TopDie) const {
+  // The DIEs whose children are being emitted, each with its next child. The
+  // tree is walked with this explicit stack rather than by recursion, so that
+  // deeply nested DIEs (such as lexical blocks) do not exhaust the native
+  // stack. The emission order is that of a recursive depth-first walk.
+  SmallVector<std::pair<const DIE *, DIE::const_child_iterator>, 16> Parents;
+  const DIE *Die = &TopDie;
+  while (true) {
+    // Emit the code (index) for the abbreviation.
+    if (isVerbose())
+      OutStreamer->AddComment("Abbrev [" + Twine(Die->getAbbrevNumber()) +
+                              "] 0x" + Twine::utohexstr(Die->getOffset()) +
+                              ":0x" + Twine::utohexstr(Die->getSize()) + " " +
+                              dwarf::TagString(Die->getTag()));
+    emitULEB128(Die->getAbbrevNumber());
 
-  // Emit the DIE attribute values.
-  for (const auto &V : Die.values()) {
-    dwarf::Attribute Attr = V.getAttribute();
-    assert(V.getForm() && "Too many attributes for DIE (check abbreviation)");
+    // Emit the DIE attribute values.
+    for (const auto &V : Die->values()) {
+      dwarf::Attribute Attr = V.getAttribute();
+      assert(V.getForm() && "Too many attributes for DIE (check abbreviation)");
 
-    if (isVerbose()) {
-      OutStreamer->AddComment(dwarf::AttributeString(Attr));
-      if (Attr == dwarf::DW_AT_accessibility)
-        OutStreamer->AddComment(
-            dwarf::AccessibilityString(V.getDIEInteger().getValue()));
+      if (isVerbose()) {
+        OutStreamer->AddComment(dwarf::AttributeString(Attr));
+        if (Attr == dwarf::DW_AT_accessibility)
+          OutStreamer->AddComment(
+              dwarf::AccessibilityString(V.getDIEInteger().getValue()));
+      }
+
+      // Emit an attribute using the defined form.
+      V.emitValue(this);
     }
 
-    // Emit an attribute using the defined form.
-    V.emitValue(this);
-  }
+    // Emit the DIE children if any.
+    if (Die->hasChildren())
+      Parents.emplace_back(Die, Die->children().begin());
 
-  // Emit the DIE children if any.
-  if (Die.hasChildren()) {
-    for (const auto &Child : Die.children())
-      emitDwarfDIE(Child);
-
-    OutStreamer->AddComment("End Of Children Mark");
-    emitInt8(0);
+    // Move to the next child of the innermost DIE that has one left, closing
+    // the DIEs whose children are all emitted.
+    Die = nullptr;
+    while (!Parents.empty()) {
+      auto &[Parent, Next] = Parents.back();
+      if (Next != Parent->children().end()) {
+        Die = &*Next;
+        ++Next;
+        break;
+      }
+      OutStreamer->AddComment("End Of Children Mark");
+      emitInt8(0);
+      Parents.pop_back();
+    }
+    if (!Die)
+      return;
   }
 }
 
