@@ -2945,12 +2945,33 @@ void CodeViewDebug::emitLocalVariable(const FunctionInfo &FI,
 
 void CodeViewDebug::emitLexicalBlockList(ArrayRef<LexicalBlock *> Blocks,
                                          const FunctionInfo& FI) {
-  for (LexicalBlock *Block : Blocks)
-    emitLexicalBlock(*Block, FI);
+  // The blocks left to emit at each open level of nesting, innermost last. A
+  // block's children are emitted between its S_BLOCK32 record and its S_END,
+  // walked with this explicit stack rather than by recursion, so that deeply
+  // nested blocks do not exhaust the native stack.
+  SmallVector<ArrayRef<LexicalBlock *>, 8> Levels;
+  Levels.push_back(Blocks);
+  while (true) {
+    ArrayRef<LexicalBlock *> &Rest = Levels.back();
+    if (Rest.empty()) {
+      Levels.pop_back();
+      if (Levels.empty())
+        return;
+      // Close the lexical block scope.
+      emitEndSymbolRecord(SymbolKind::S_END);
+      continue;
+    }
+    const LexicalBlock &Block = *Rest.front();
+    Rest = Rest.drop_front();
+    emitLexicalBlock(Block, FI);
+
+    // Emit lexical blocks contained within this block.
+    Levels.push_back(Block.Children);
+  }
 }
 
-/// Emit an S_BLOCK32 and S_END record pair delimiting the contents of a
-/// lexical block scope.
+/// Emit the S_BLOCK32 record that opens a lexical block scope, and the
+/// variables local to it.
 void CodeViewDebug::emitLexicalBlock(const LexicalBlock &Block,
                                      const FunctionInfo& FI) {
   MCSymbol *RecordEnd = beginSymbolRecord(SymbolKind::S_BLOCK32);
@@ -2971,12 +2992,6 @@ void CodeViewDebug::emitLexicalBlock(const LexicalBlock &Block,
   // Emit variables local to this lexical block.
   emitLocalVariableList(FI, Block.Locals);
   emitGlobalVariableList(Block.Globals);
-
-  // Emit lexical blocks contained within this block.
-  emitLexicalBlockList(Block.Children, FI);
-
-  // Close the lexical block scope.
-  emitEndSymbolRecord(SymbolKind::S_END);
 }
 
 /// Convenience routine for collecting lexical block information for a list
@@ -2986,8 +3001,110 @@ void CodeViewDebug::collectLexicalBlockInfo(
         SmallVectorImpl<LexicalBlock *> &Blocks,
         SmallVectorImpl<LocalVariable> &Locals,
         SmallVectorImpl<CVGlobalVariable> &Globals) {
-  for (LexicalScope *Scope : Scopes)
-    collectLexicalBlockInfo(*Scope, Blocks, Locals, Globals);
+  // The scopes left to visit, each with the block, local and global lists it
+  // goes into. Children are queued last first, so a scope's subtree is done
+  // before its next sibling: the order of a recursive depth-first walk, kept
+  // on this explicit stack so that deeply nested scopes do not exhaust the
+  // native stack.
+  struct PendingScope {
+    LexicalScope *Scope;
+    SmallVectorImpl<LexicalBlock *> *ParentBlocks;
+    SmallVectorImpl<LocalVariable> *ParentLocals;
+    SmallVectorImpl<CVGlobalVariable> *ParentGlobals;
+  };
+  SmallVector<PendingScope, 8> WorkList;
+  auto QueueScopes = [&WorkList](SmallVectorImpl<LexicalScope *> &Children,
+                                 SmallVectorImpl<LexicalBlock *> &ParentBlocks,
+                                 SmallVectorImpl<LocalVariable> &ParentLocals,
+                                 SmallVectorImpl<CVGlobalVariable> &ParentGlobals) {
+    for (LexicalScope *Child : llvm::reverse(Children))
+      WorkList.push_back({Child, &ParentBlocks, &ParentLocals, &ParentGlobals});
+  };
+  QueueScopes(Scopes, Blocks, Locals, Globals);
+
+  while (!WorkList.empty()) {
+    PendingScope Pending = WorkList.pop_back_val();
+    LexicalScope &Scope = *Pending.Scope;
+    SmallVectorImpl<LexicalBlock *> &ParentBlocks = *Pending.ParentBlocks;
+    SmallVectorImpl<LocalVariable> &ParentLocals = *Pending.ParentLocals;
+    SmallVectorImpl<CVGlobalVariable> &ParentGlobals = *Pending.ParentGlobals;
+
+    if (Scope.isAbstractScope())
+      continue;
+
+    // Gather information about the lexical scope including local variables,
+    // global variables, and address ranges.
+    bool IgnoreScope = false;
+    auto LI = ScopeVariables.find(&Scope);
+    SmallVectorImpl<LocalVariable> *Locals =
+        LI != ScopeVariables.end() ? &LI->second : nullptr;
+    auto GI = ScopeGlobals.find(Scope.getScopeNode());
+    SmallVectorImpl<CVGlobalVariable> *Globals =
+        GI != ScopeGlobals.end() ? GI->second.get() : nullptr;
+    const DILexicalBlock *DILB = dyn_cast<DILexicalBlock>(Scope.getScopeNode());
+    const SmallVectorImpl<InsnRange> &Ranges = Scope.getRanges();
+
+    // Ignore lexical scopes which do not contain variables.
+    if (!Locals && !Globals)
+      IgnoreScope = true;
+
+    // Ignore lexical scopes which are not lexical blocks.
+    if (!DILB)
+      IgnoreScope = true;
+
+    // Ignore scopes which have too many address ranges to represent in the
+    // current CodeView format or do not have a valid address range.
+    //
+    // For lexical scopes with multiple address ranges you may be tempted to
+    // construct a single range covering every instruction where the block is
+    // live and everything in between.  Unfortunately, Visual Studio only
+    // displays variables from the first matching lexical block scope.  If the
+    // first lexical block contains exception handling code or cold code which
+    // is moved to the bottom of the routine creating a single range covering
+    // nearly the entire routine, then it will hide all other lexical blocks
+    // and the variables they contain.
+    if (Ranges.size() != 1 || !getLabelAfterInsn(Ranges.front().second))
+      IgnoreScope = true;
+
+    if (IgnoreScope) {
+      // This scope can be safely ignored and eliminating it will reduce the
+      // size of the debug information. Be sure to collect any variable and
+      // scope information from the this scope or any of its children and
+      // collapse them into the parent scope.
+      if (Locals)
+        ParentLocals.append(Locals->begin(), Locals->end());
+      if (Globals)
+        ParentGlobals.append(Globals->begin(), Globals->end());
+      QueueScopes(Scope.getChildren(), ParentBlocks, ParentLocals,
+                  ParentGlobals);
+      continue;
+    }
+
+    // Create a new CodeView lexical block for this lexical scope.  If we've
+    // seen this DILexicalBlock before then the scope tree is malformed and
+    // we can handle this gracefully by not processing it a second time.
+    auto BlockInsertion = CurFn->LexicalBlocks.try_emplace(DILB);
+    if (!BlockInsertion.second)
+      continue;
+
+    // Create a lexical block containing the variables and collect the
+    // lexical block information for the children.
+    const InsnRange &Range = Ranges.front();
+    assert(Range.first && Range.second);
+    LexicalBlock &Block = BlockInsertion.first->second;
+    Block.Begin = getLabelBeforeInsn(Range.first);
+    Block.End = getLabelAfterInsn(Range.second);
+    assert(Block.Begin && "missing label for scope begin");
+    assert(Block.End && "missing label for scope end");
+    Block.Name = DILB->getName();
+    if (Locals)
+      Block.Locals = std::move(*Locals);
+    if (Globals)
+      Block.Globals = std::move(*Globals);
+    ParentBlocks.push_back(&Block);
+    QueueScopes(Scope.getChildren(), Block.Children, Block.Locals,
+                Block.Globals);
+  }
 }
 
 /// Populate the lexical blocks and local variable lists of the parent with
@@ -2997,85 +3114,8 @@ void CodeViewDebug::collectLexicalBlockInfo(
     SmallVectorImpl<LexicalBlock *> &ParentBlocks,
     SmallVectorImpl<LocalVariable> &ParentLocals,
     SmallVectorImpl<CVGlobalVariable> &ParentGlobals) {
-  if (Scope.isAbstractScope())
-    return;
-
-  // Gather information about the lexical scope including local variables,
-  // global variables, and address ranges.
-  bool IgnoreScope = false;
-  auto LI = ScopeVariables.find(&Scope);
-  SmallVectorImpl<LocalVariable> *Locals =
-      LI != ScopeVariables.end() ? &LI->second : nullptr;
-  auto GI = ScopeGlobals.find(Scope.getScopeNode());
-  SmallVectorImpl<CVGlobalVariable> *Globals =
-      GI != ScopeGlobals.end() ? GI->second.get() : nullptr;
-  const DILexicalBlock *DILB = dyn_cast<DILexicalBlock>(Scope.getScopeNode());
-  const SmallVectorImpl<InsnRange> &Ranges = Scope.getRanges();
-
-  // Ignore lexical scopes which do not contain variables.
-  if (!Locals && !Globals)
-    IgnoreScope = true;
-
-  // Ignore lexical scopes which are not lexical blocks.
-  if (!DILB)
-    IgnoreScope = true;
-
-  // Ignore scopes which have too many address ranges to represent in the
-  // current CodeView format or do not have a valid address range.
-  //
-  // For lexical scopes with multiple address ranges you may be tempted to
-  // construct a single range covering every instruction where the block is
-  // live and everything in between.  Unfortunately, Visual Studio only
-  // displays variables from the first matching lexical block scope.  If the
-  // first lexical block contains exception handling code or cold code which
-  // is moved to the bottom of the routine creating a single range covering
-  // nearly the entire routine, then it will hide all other lexical blocks
-  // and the variables they contain.
-  if (Ranges.size() != 1 || !getLabelAfterInsn(Ranges.front().second))
-    IgnoreScope = true;
-
-  if (IgnoreScope) {
-    // This scope can be safely ignored and eliminating it will reduce the
-    // size of the debug information. Be sure to collect any variable and scope
-    // information from the this scope or any of its children and collapse them
-    // into the parent scope.
-    if (Locals)
-      ParentLocals.append(Locals->begin(), Locals->end());
-    if (Globals)
-      ParentGlobals.append(Globals->begin(), Globals->end());
-    collectLexicalBlockInfo(Scope.getChildren(),
-                            ParentBlocks,
-                            ParentLocals,
-                            ParentGlobals);
-    return;
-  }
-
-  // Create a new CodeView lexical block for this lexical scope.  If we've
-  // seen this DILexicalBlock before then the scope tree is malformed and
-  // we can handle this gracefully by not processing it a second time.
-  auto BlockInsertion = CurFn->LexicalBlocks.try_emplace(DILB);
-  if (!BlockInsertion.second)
-    return;
-
-  // Create a lexical block containing the variables and collect the
-  // lexical block information for the children.
-  const InsnRange &Range = Ranges.front();
-  assert(Range.first && Range.second);
-  LexicalBlock &Block = BlockInsertion.first->second;
-  Block.Begin = getLabelBeforeInsn(Range.first);
-  Block.End = getLabelAfterInsn(Range.second);
-  assert(Block.Begin && "missing label for scope begin");
-  assert(Block.End && "missing label for scope end");
-  Block.Name = DILB->getName();
-  if (Locals)
-    Block.Locals = std::move(*Locals);
-  if (Globals)
-    Block.Globals = std::move(*Globals);
-  ParentBlocks.push_back(&Block);
-  collectLexicalBlockInfo(Scope.getChildren(),
-                          Block.Children,
-                          Block.Locals,
-                          Block.Globals);
+  SmallVector<LexicalScope *, 1> Scopes = {&Scope};
+  collectLexicalBlockInfo(Scopes, ParentBlocks, ParentLocals, ParentGlobals);
 }
 
 void CodeViewDebug::endFunctionImpl(const MachineFunction *MF) {

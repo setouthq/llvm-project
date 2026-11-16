@@ -266,38 +266,57 @@ LLVM_DUMP_METHOD void DIE::dump() const {
 unsigned DIE::computeOffsetsAndAbbrevs(const dwarf::FormParams &FormParams,
                                        DIEAbbrevSet &AbbrevSet,
                                        unsigned CUOffset) {
-  // Unique the abbreviation and fill in the abbreviation number so this DIE
-  // can be emitted.
-  const DIEAbbrev &Abbrev = AbbrevSet.uniqueAbbreviation(*this);
+  // The DIEs whose children are being visited, each with its next child. The
+  // tree is walked with this explicit stack rather than by recursion, so that
+  // deeply nested DIEs (such as lexical blocks) do not exhaust the native
+  // stack. The visit order is that of a recursive depth-first walk.
+  SmallVector<std::pair<DIE *, child_iterator>, 16> Parents;
+  DIE *Die = this;
+  while (true) {
+    // Unique the abbreviation and fill in the abbreviation number so this DIE
+    // can be emitted.
+    const DIEAbbrev &Abbrev = AbbrevSet.uniqueAbbreviation(*Die);
 
-  // Set compile/type unit relative offset of this DIE.
-  setOffset(CUOffset);
+    // Set compile/type unit relative offset of this DIE.
+    Die->setOffset(CUOffset);
 
-  // Add the byte size of the abbreviation code.
-  CUOffset += getULEB128Size(getAbbrevNumber());
+    // Add the byte size of the abbreviation code.
+    CUOffset += getULEB128Size(Die->getAbbrevNumber());
 
-  // Add the byte size of all the DIE attribute values.
-  for (const auto &V : values())
-    CUOffset += V.sizeOf(FormParams);
+    // Add the byte size of all the DIE attribute values.
+    for (const auto &V : Die->values())
+      CUOffset += V.sizeOf(FormParams);
 
-  // Let the children compute their offsets and abbreviation numbers.
-  if (hasChildren()) {
-    (void)Abbrev;
-    assert(Abbrev.hasChildren() && "Children flag not set");
+    // Let the children compute their offsets and abbreviation numbers.
+    if (Die->hasChildren()) {
+      (void)Abbrev;
+      assert(Abbrev.hasChildren() && "Children flag not set");
+      Parents.emplace_back(Die, Die->children().begin());
+    } else {
+      // Compute the byte size of this DIE and all of its children correctly.
+      // This is needed so that top level DIE can help the compile unit set
+      // its length correctly.
+      Die->setSize(CUOffset - Die->getOffset());
+    }
 
-    for (auto &Child : children())
-      CUOffset =
-          Child.computeOffsetsAndAbbrevs(FormParams, AbbrevSet, CUOffset);
-
-    // Each child chain is terminated with a zero byte, adjust the offset.
-    CUOffset += sizeof(int8_t);
+    // Move to the next child of the innermost DIE that has one left, finishing
+    // the DIEs whose children are all done.
+    Die = nullptr;
+    while (!Parents.empty()) {
+      auto &[Parent, Next] = Parents.back();
+      if (Next != Parent->children().end()) {
+        Die = &*Next;
+        ++Next;
+        break;
+      }
+      // Each child chain is terminated with a zero byte, adjust the offset.
+      CUOffset += sizeof(int8_t);
+      Parent->setSize(CUOffset - Parent->getOffset());
+      Parents.pop_back();
+    }
+    if (!Die)
+      return CUOffset;
   }
-
-  // Compute the byte size of this DIE and all of its children correctly. This
-  // is needed so that top level DIE can help the compile unit set its length
-  // correctly.
-  setSize(CUOffset - getOffset());
-  return CUOffset;
 }
 
 //===----------------------------------------------------------------------===//

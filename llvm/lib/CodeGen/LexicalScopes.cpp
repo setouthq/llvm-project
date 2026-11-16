@@ -15,6 +15,7 @@
 
 #include "llvm/CodeGen/LexicalScopes.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -170,79 +171,138 @@ LexicalScope *LexicalScopes::getOrCreateLexicalScope(const DILocalScope *Scope,
   return getOrCreateRegularScope(Scope);
 }
 
+// The three getOrCreate*Scope functions below create a missing scope after its
+// parent, walking up the chain of enclosing scopes. They walk it with a loop
+// and create the missing scopes outermost first, as a recursion through the
+// parents would, without a native stack frame per level of nesting.
+
 /// getOrCreateRegularScope - Find or create a regular lexical scope.
 LexicalScope *
 LexicalScopes::getOrCreateRegularScope(const DILocalScope *Scope) {
-  assert(Scope && "Invalid Scope encoding!");
-  Scope = Scope->getNonLexicalBlockFileScope();
-
-  auto I = LexicalScopeMap.find(Scope);
-  if (I != LexicalScopeMap.end())
-    return &I->second;
-
-  // FIXME: Should the following dyn_cast be DILexicalBlock?
+  // The missing scopes, innermost first.
+  SmallVector<const DILocalScope *, 8> Missing;
   LexicalScope *Parent = nullptr;
-  if (auto *Block = dyn_cast<DILexicalBlockBase>(Scope))
-    Parent = getOrCreateLexicalScope(Block->getScope());
-  I = LexicalScopeMap.emplace(std::piecewise_construct,
-                              std::forward_as_tuple(Scope),
-                              std::forward_as_tuple(Parent, Scope, nullptr,
-                                                    false)).first;
+  while (true) {
+    assert(Scope && "Invalid Scope encoding!");
+    Scope = Scope->getNonLexicalBlockFileScope();
 
-  if (!Parent) {
-    assert(cast<DISubprogram>(Scope)->describes(&MF->getFunction()));
-    assert(!CurrentFnLexicalScope);
-    CurrentFnLexicalScope = &I->second;
+    auto I = LexicalScopeMap.find(Scope);
+    if (I != LexicalScopeMap.end()) {
+      Parent = &I->second;
+      break;
+    }
+    Missing.push_back(Scope);
+
+    // FIXME: Should the following dyn_cast be DILexicalBlock?
+    auto *Block = dyn_cast<DILexicalBlockBase>(Scope);
+    if (!Block)
+      break;
+    Scope = Block->getScope();
   }
 
-  return &I->second;
+  for (const DILocalScope *S : llvm::reverse(Missing)) {
+    auto I = LexicalScopeMap.emplace(std::piecewise_construct,
+                                     std::forward_as_tuple(S),
+                                     std::forward_as_tuple(Parent, S, nullptr,
+                                                           false)).first;
+
+    if (!Parent) {
+      assert(cast<DISubprogram>(S)->describes(&MF->getFunction()));
+      assert(!CurrentFnLexicalScope);
+      CurrentFnLexicalScope = &I->second;
+    }
+    Parent = &I->second;
+  }
+
+  return Parent;
 }
 
 /// getOrCreateInlinedScope - Find or create an inlined lexical scope.
 LexicalScope *
 LexicalScopes::getOrCreateInlinedScope(const DILocalScope *Scope,
                                        const DILocation *InlinedAt) {
-  assert(Scope && "Invalid Scope encoding!");
-  Scope = Scope->getNonLexicalBlockFileScope();
-  std::pair<const DILocalScope *, const DILocation *> P(Scope, InlinedAt);
-  auto I = InlinedLexicalScopeMap.find(P);
-  if (I != InlinedLexicalScopeMap.end())
-    return &I->second;
+  // The missing scopes, innermost first. Past the inlined subprogram the walk
+  // continues at its call site, as getOrCreateLexicalScope(InlinedAt) would.
+  SmallVector<std::pair<const DILocalScope *, const DILocation *>, 8> Missing;
+  LexicalScope *Parent = nullptr;
+  while (true) {
+    assert(Scope && "Invalid Scope encoding!");
+    Scope = Scope->getNonLexicalBlockFileScope();
+    std::pair<const DILocalScope *, const DILocation *> P(Scope, InlinedAt);
+    auto I = InlinedLexicalScopeMap.find(P);
+    if (I != InlinedLexicalScopeMap.end()) {
+      Parent = &I->second;
+      break;
+    }
+    Missing.push_back(P);
 
-  LexicalScope *Parent;
-  if (auto *Block = dyn_cast<DILexicalBlockBase>(Scope))
-    Parent = getOrCreateInlinedScope(Block->getScope(), InlinedAt);
-  else
-    Parent = getOrCreateLexicalScope(InlinedAt);
+    if (auto *Block = dyn_cast<DILexicalBlockBase>(Scope)) {
+      Scope = Block->getScope();
+      continue;
+    }
 
-  I = InlinedLexicalScopeMap
-          .emplace(std::piecewise_construct, std::forward_as_tuple(P),
-                   std::forward_as_tuple(Parent, Scope, InlinedAt, false))
-          .first;
-  return &I->second;
+    // getOrCreateLexicalScope(InlinedAt), with its inlined case continuing
+    // this loop.
+    const DILocalScope *CallScope = InlinedAt->getScope();
+    const DILocation *CallInlinedAt = InlinedAt->getInlinedAt();
+    // Skip scopes inlined from a NoDebug compile unit.
+    while (CallInlinedAt &&
+           skipUnit(CallScope->getSubprogram()->getUnit())) {
+      CallScope = CallInlinedAt->getScope();
+      CallInlinedAt = CallInlinedAt->getInlinedAt();
+    }
+    if (!CallInlinedAt) {
+      Parent = getOrCreateRegularScope(CallScope);
+      break;
+    }
+    // Create an abstract scope for inlined function.
+    getOrCreateAbstractScope(CallScope);
+    Scope = CallScope;
+    InlinedAt = CallInlinedAt;
+  }
+
+  for (const auto &P : llvm::reverse(Missing))
+    Parent = &InlinedLexicalScopeMap
+                  .emplace(std::piecewise_construct, std::forward_as_tuple(P),
+                           std::forward_as_tuple(Parent, P.first, P.second,
+                                                 false))
+                  .first->second;
+  return Parent;
 }
 
 /// getOrCreateAbstractScope - Find or create an abstract lexical scope.
 LexicalScope *
 LexicalScopes::getOrCreateAbstractScope(const DILocalScope *Scope) {
-  assert(Scope && "Invalid Scope encoding!");
-  Scope = Scope->getNonLexicalBlockFileScope();
-  auto I = AbstractScopeMap.find(Scope);
-  if (I != AbstractScopeMap.end())
-    return &I->second;
-
-  // FIXME: Should the following isa be DILexicalBlock?
+  // The missing scopes, innermost first.
+  SmallVector<const DILocalScope *, 8> Missing;
   LexicalScope *Parent = nullptr;
-  if (auto *Block = dyn_cast<DILexicalBlockBase>(Scope))
-    Parent = getOrCreateAbstractScope(Block->getScope());
+  while (true) {
+    assert(Scope && "Invalid Scope encoding!");
+    Scope = Scope->getNonLexicalBlockFileScope();
+    auto I = AbstractScopeMap.find(Scope);
+    if (I != AbstractScopeMap.end()) {
+      Parent = &I->second;
+      break;
+    }
+    Missing.push_back(Scope);
 
-  I = AbstractScopeMap.emplace(std::piecewise_construct,
-                               std::forward_as_tuple(Scope),
-                               std::forward_as_tuple(Parent, Scope,
-                                                     nullptr, true)).first;
-  if (isa<DISubprogram>(Scope))
-    AbstractScopesList.push_back(&I->second);
-  return &I->second;
+    // FIXME: Should the following isa be DILexicalBlock?
+    auto *Block = dyn_cast<DILexicalBlockBase>(Scope);
+    if (!Block)
+      break;
+    Scope = Block->getScope();
+  }
+
+  for (const DILocalScope *S : llvm::reverse(Missing)) {
+    auto I = AbstractScopeMap.emplace(std::piecewise_construct,
+                                      std::forward_as_tuple(S),
+                                      std::forward_as_tuple(Parent, S,
+                                                            nullptr, true)).first;
+    if (isa<DISubprogram>(S))
+      AbstractScopesList.push_back(&I->second);
+    Parent = &I->second;
+  }
+  return Parent;
 }
 
 /// constructScopeNest - Traverse the Scope tree depth-first, storing
