@@ -1745,29 +1745,42 @@ unreachable:                                      ; preds = %rethrow, %entry
 ; Fixed by running fixCatchUnwindMismatches() before fixCallUnwindMismatches().
 ;
 ; This pattern occurs in Rust's catch_unwind inside a destructor.
+;
+; CFGSort places each EH pad before its next unwind destination:
+; inner_catchpad, then terminate_catchpad, then outer_catchpad. So the inner
+; try nests directly inside terminate_catchswitch's try, which nests inside
+; outer_catchswitch's, and no catch-mismatch delegate is needed.
 
 ; CHECK-LABEL: catch_unwind_in_cleanup:
 ; CHECK:        catch_all
 ; CHECK:          try
 ; CHECK:            try
-; CHECK:              call  resume_unwind
-; CHECK:            catch   {{.*}} __cpp_exception
-; CHECK:              call  do_catch
-; end_cleanup and rethrow are inside the inner catch's scope, but each gets
-; its own try-delegate to route exceptions to the correct destination rather
-; than going through the catch-mismatch delegate to the terminate handler.
 ; CHECK:              try
-; CHECK:                call  end_cleanup
-; CHECK:              delegate    7
-;                                (caller)
+; CHECK:                call  resume_unwind
+; CHECK:              catch   {{.*}} __cpp_exception
+; CHECK:                call  do_catch
+; end_cleanup and rethrow are inside the inner catch's scope, and each gets its
+; own try-delegate that routes its exception to the right destination instead
+; of the enclosing terminate handler.
+; CHECK:                try
+; CHECK:                  call  end_cleanup
+; CHECK:                delegate    4
+;                                  (caller)
+; CHECK:                try
+; CHECK:                  rethrow   4
+;                                  (Rethrow exception caught by outermost catch_all)
+; CHECK:                delegate    2
+;                                  (outer_catchswitch)
+; CHECK:              end_try
+; CHECK:            catch_all
+;                              (terminate_catchpad)
+; panic_in_cleanup sits inside outer_catchswitch's try, so it gets a
+; try-delegate to the caller.
 ; CHECK:              try
-; CHECK:                rethrow   7
-;                                (Rethrow exception caught by outermost catch_all)
-; CHECK:              delegate    2
-;                                (outer_catchswitch)
+; CHECK:                call  panic_in_cleanup
+; CHECK:              delegate    3
+;                                  (caller)
 ; CHECK:            end_try
-; CHECK:          delegate    3
-;                            (terminate)
 ; CHECK:          catch   {{.*}} __cpp_exception
 ; CHECK:            call  do_catch
 ; CHECK:            return

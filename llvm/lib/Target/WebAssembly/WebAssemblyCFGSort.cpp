@@ -43,6 +43,15 @@ static cl::opt<bool> WasmDisableEHPadSort(
         "WebAssembly: Disable EH pad-first sort order. Testing purpose only."),
     cl::init(false));
 
+// Option to turn off the EH pad unwind order (see sortBlocks). It is on by
+// default; off gives the block order of earlier versions, in which a catchpad
+// could be placed after its catchswitch's unwind destination.
+static cl::opt<bool> WasmEHPadUnwindOrder(
+    "wasm-ehpad-unwind-order", cl::Hidden,
+    cl::desc("WebAssembly: Place each EH pad before the EH pad an exception "
+             "it does not catch goes to next (default: on)"),
+    cl::init(true));
+
 namespace {
 
 class WebAssemblyCFGSort final : public MachineFunctionPass {
@@ -133,38 +142,9 @@ namespace {
 //
 // If we give a higher priority to an EH pad whenever it is ready in this
 // example, when both bb1 and bb2 are ready, we would pick up bb2 first.
-//
-// When two EH pads are ready at the same time, and one of them is the next
-// unwind destination of the other (for example a catchswitch's 'unwind label'),
-// the first unwind destination must be picked first:
-//
-// bb0:
-//   call @foo      // If this throws, unwind to bb2; if bb2 does not catch it,
-//                  // unwind to bb1
-// bb1 (ehpad):     // cleanuppad, the catchswitch's unwind destination
-//   handler_bb1
-// bb2 (ehpad):     // catchswitch + catchpad
-//   handler_bb2
-//
-// CFGStackify places a try_table for each EH pad and nests a later EH pad's
-// try_table around an earlier one's. bb1 must enclose bb2 here, because an
-// exception bb2 does not catch goes to bb1. With bb1 sorted first, bb1 ends up
-// nested inside bb2 instead, and the nested try_table that
-// fixCatchUnwindMismatches adds around bb2 cannot reach bb1's trampoline. So we
-// rank EH pads by their position in their predecessors' unwind chains and pick
-// a lower rank first.
-using EHPadRankMap = DenseMap<const MachineBasicBlock *, unsigned>;
-
-static unsigned getEHPadRank(const EHPadRankMap &Ranks,
-                             const MachineBasicBlock *MBB) {
-  auto It = Ranks.find(MBB);
-  return It == Ranks.end() ? 0 : It->second;
-}
 
 /// Sort blocks by their number.
 struct CompareBlockNumbers {
-  const EHPadRankMap &Ranks;
-  explicit CompareBlockNumbers(const EHPadRankMap &Ranks) : Ranks(Ranks) {}
   bool operator()(const MachineBasicBlock *A,
                   const MachineBasicBlock *B) const {
     if (!WasmDisableEHPadSort) {
@@ -172,11 +152,6 @@ struct CompareBlockNumbers {
         return false;
       if (!A->isEHPad() && B->isEHPad())
         return true;
-      if (A->isEHPad() && B->isEHPad()) {
-        unsigned RankA = getEHPadRank(Ranks, A), RankB = getEHPadRank(Ranks, B);
-        if (RankA != RankB)
-          return RankA > RankB;
-      }
     }
 
     return A->getNumber() > B->getNumber();
@@ -184,9 +159,6 @@ struct CompareBlockNumbers {
 };
 /// Sort blocks by their number in the opposite order..
 struct CompareBlockNumbersBackwards {
-  const EHPadRankMap &Ranks;
-  explicit CompareBlockNumbersBackwards(const EHPadRankMap &Ranks)
-      : Ranks(Ranks) {}
   bool operator()(const MachineBasicBlock *A,
                   const MachineBasicBlock *B) const {
     if (!WasmDisableEHPadSort) {
@@ -194,46 +166,11 @@ struct CompareBlockNumbersBackwards {
         return false;
       if (!A->isEHPad() && B->isEHPad())
         return true;
-      if (A->isEHPad() && B->isEHPad()) {
-        unsigned RankA = getEHPadRank(Ranks, A), RankB = getEHPadRank(Ranks, B);
-        if (RankA != RankB)
-          return RankA > RankB;
-      }
     }
 
     return A->getNumber() < B->getNumber();
   }
 };
-
-/// Give each EH pad a rank one higher than any EH pad that unwinds to it next.
-/// A block's EH pad successors are listed in unwind order (see
-/// findUnwindDestinations in SelectionDAGBuilder.cpp), so each EH pad successor
-/// after the first is the next unwind destination of the one before it.
-static void computeEHPadRanks(MachineFunction &MF, EHPadRankMap &Ranks) {
-  // Unwind chains are acyclic, so this settles within (number of blocks)
-  // rounds; the bound only guards against malformed input.
-  for (unsigned Round = 0, E = MF.getNumBlockIDs(); Round != E; ++Round) {
-    bool Changed = false;
-    for (MachineBasicBlock &MBB : MF) {
-      const MachineBasicBlock *Prev = nullptr;
-      for (const MachineBasicBlock *Succ : MBB.successors()) {
-        if (!Succ->isEHPad())
-          continue;
-        if (Prev) {
-          unsigned Rank = getEHPadRank(Ranks, Prev) + 1;
-          if (getEHPadRank(Ranks, Succ) < Rank) {
-            Ranks[Succ] = Rank;
-            Changed = true;
-          }
-        }
-        Prev = Succ;
-      }
-    }
-    if (!Changed)
-      break;
-  }
-}
-
 /// Bookkeeping for a region to help ensure that we don't mix blocks not
 /// dominated by the its header among its blocks.
 struct Entry {
@@ -248,6 +185,62 @@ struct Entry {
       : TheRegion(R), NumBlocksLeft(R->getNumBlocks()) {}
 };
 } // end anonymous namespace
+
+/// Returns the EH pad an exception goes to when EHPad does not catch it, or
+/// nullptr if there is none. A block lists its EH pad successors in unwind
+/// order: a catchswitch's catchpad, then the catchswitch's unwind destination,
+/// and so on (see findUnwindDestinations in SelectionDAGBuilder.cpp). Like
+/// fixCatchUnwindMismatches in CFGStackify, this reads the list of EHPad's
+/// first predecessor.
+static MachineBasicBlock *getNextUnwindDest(const MachineBasicBlock *EHPad) {
+  if (EHPad->pred_empty())
+    return nullptr;
+  const MachineBasicBlock *Pred = *EHPad->pred_begin();
+  auto I = find(Pred->successors(), EHPad);
+  if (I == Pred->succ_end() || std::next(I) == Pred->succ_end())
+    return nullptr;
+  return *std::next(I);
+}
+
+/// For each EH pad X with a next unwind destination Y, records Y in
+/// NextUnwindDest and counts X as one more predecessor of Y in NumPredsLeft, so
+/// that Y can be placed only after X. See sortBlocks.
+static void addEHPadUnwindOrder(
+    MachineFunction &MF, const MachineLoopInfo &MLI,
+    DenseMap<const MachineBasicBlock *, MachineBasicBlock *> &NextUnwindDest,
+    SmallVectorImpl<unsigned> &NumPredsLeft) {
+  for (MachineBasicBlock &X : MF) {
+    if (!X.isEHPad())
+      continue;
+    MachineBasicBlock *Y = getNextUnwindDest(&X);
+    if (!Y || Y == &X || !Y->isEHPad())
+      continue;
+    // Keep the pair only if every block that unwinds to X also unwinds to Y,
+    // and not along a loop backedge. Then X is ready no later than Y, and a
+    // region that defers X cannot contain Y, so the sort never waits forever.
+    // A pair that fails this cannot be ordered by any topological sort: Y is a
+    // loop header and its loop contains a block that unwinds to X (an
+    // exception retry loop entered through Y). The successor lists that
+    // findUnwindDestinations builds pass the first test by construction.
+    MachineLoop *YLoop = MLI.getLoopFor(Y);
+    if (YLoop && YLoop->getHeader() != Y)
+      YLoop = nullptr;
+    if (!all_of(X.predecessors(), [&](const MachineBasicBlock *Pred) {
+          return Pred->isSuccessor(Y) && !(YLoop && YLoop->contains(Pred));
+        }))
+      continue;
+    // Unwind chains are acyclic: the IR verifier rejects EH pads that unwind to
+    // each other. Skip a pair that would close a cycle anyway, so that
+    // malformed input cannot leave a block waiting forever.
+    const MachineBasicBlock *Walk = Y;
+    while (Walk && Walk != &X)
+      Walk = NextUnwindDest.lookup(Walk);
+    if (Walk == &X)
+      continue;
+    NextUnwindDest[&X] = Y;
+    ++NumPredsLeft[Y->getNumber()];
+  }
+}
 
 /// Sort the blocks, taking special care to make sure that regions are not
 /// interrupted by blocks not dominated by their header.
@@ -273,6 +266,38 @@ static void sortBlocks(MachineFunction &MF, const MachineLoopInfo &MLI,
     NumPredsLeft[MBB.getNumber()] = N;
   }
 
+  // An EH pad also has to be placed before its next unwind destination, the
+  // EH pad an exception goes to when this one does not catch it:
+  //
+  // bb0:
+  //   call @foo      // If this throws, unwind to bb2; if bb2 does not catch
+  //                  // it, unwind to bb1
+  // bb1 (ehpad):     // cleanuppad, the catchswitch's unwind destination
+  //   handler_bb1
+  // bb2 (ehpad):     // catchswitch + catchpad
+  //   handler_bb2
+  //
+  // CFGStackify gives each EH pad a try_table (with the legacy encoding, a
+  // try) whose range ends right before the EH pad and starts at a common
+  // dominator of the blocks that unwind to it. bb2 catches only
+  // __cpp_exception, so any other exception has to reach bb1 next: bb1's
+  // try_table has to enclose bb2's, so bb2 has to come first. If bb1 came
+  // first, its try_table would nest inside bb2's. Then, if yet another EH pad
+  // enclosed both, fixCatchUnwindMismatches would wrap bb2's try_table in one
+  // that targets bb1 through a trampoline inside bb1's try_table, out of scope
+  // (an invalid branch depth); if none did, an exception bb2 does not catch
+  // would skip bb1.
+  //
+  // Picking bb2 first when both are ready at once is not enough, because they
+  // can become ready at different times: a region can defer bb2 to the Ready
+  // queue while bb1 becomes ready on the Preferred queue, which is drained
+  // first. So the order is a readiness constraint: bb1 counts bb2 as one more
+  // predecessor, released when bb2 is placed. addEHPadUnwindOrder says which
+  // pairs it leaves out.
+  DenseMap<const MachineBasicBlock *, MachineBasicBlock *> NextUnwindDest;
+  if (!WasmDisableEHPadSort && WasmEHPadUnwindOrder)
+    addEHPadUnwindOrder(MF, MLI, NextUnwindDest, NumPredsLeft);
+
   // Topological sort the CFG, with additional constraints:
   //  - Between a region header and the last block in the region, there can be
   //    no blocks not dominated by its header.
@@ -281,15 +306,12 @@ static void sortBlocks(MachineFunction &MF, const MachineLoopInfo &MLI,
   // processed successors, to help preserve block sequences from the original
   // order. Ready has the remaining ready blocks. EH blocks are picked first
   // from both queues.
-  EHPadRankMap EHPadRanks;
-  if (!WasmDisableEHPadSort)
-    computeEHPadRanks(MF, EHPadRanks);
   PriorityQueue<MachineBasicBlock *, std::vector<MachineBasicBlock *>,
                 CompareBlockNumbers>
-      Preferred((CompareBlockNumbers(EHPadRanks)));
+      Preferred;
   PriorityQueue<MachineBasicBlock *, std::vector<MachineBasicBlock *>,
                 CompareBlockNumbersBackwards>
-      Ready((CompareBlockNumbersBackwards(EHPadRanks)));
+      Ready;
 
   SortRegionInfo SRI(MLI, WEI);
   SmallVector<Entry, 4> Entries;
@@ -321,6 +343,10 @@ static void sortBlocks(MachineFunction &MF, const MachineLoopInfo &MLI,
       if (--NumPredsLeft[Succ->getNumber()] == 0)
         Preferred.push(Succ);
     }
+    // MBB's next unwind destination no longer waits for MBB.
+    if (MachineBasicBlock *Dest = NextUnwindDest.lookup(MBB))
+      if (--NumPredsLeft[Dest->getNumber()] == 0)
+        Preferred.push(Dest);
     // Determine the block to follow MBB. First try to find a preferred block,
     // to preserve the original block order when possible.
     MachineBasicBlock *Next = nullptr;
