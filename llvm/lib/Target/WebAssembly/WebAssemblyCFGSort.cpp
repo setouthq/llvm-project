@@ -218,10 +218,10 @@ static void addEHPadUnwindOrder(
     // Keep the pair only if every block that unwinds to X also unwinds to Y,
     // and not along a loop backedge. Then X is ready no later than Y, and a
     // region that defers X cannot contain Y, so the sort never waits forever.
-    // A pair that fails this cannot be ordered by any topological sort: Y is a
-    // loop header and its loop contains a block that unwinds to X (an
-    // exception retry loop entered through Y). The successor lists that
-    // findUnwindDestinations builds pass the first test by construction.
+    // The successor lists that findUnwindDestinations builds always pass the
+    // first test. A pair that fails the second cannot be ordered by any
+    // topological sort: Y is a loop header and its loop contains a block that
+    // unwinds to X (an exception retry loop entered through Y).
     MachineLoop *YLoop = MLI.getLoopFor(Y);
     if (YLoop && YLoop->getHeader() != Y)
       YLoop = nullptr;
