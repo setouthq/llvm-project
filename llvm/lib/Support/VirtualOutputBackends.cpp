@@ -361,8 +361,19 @@ Error OnDiskOutputFile::initializeStream() {
   }
 
   // Buffer the stream if necessary.
+#ifdef __wasi__
+  // setout fork (rust lane p3speed, A5): on a WASI host every binary output is
+  // built in memory and written once. A seekable file would otherwise get one
+  // seek-and-write per patch (the wasm object writer patches each section size:
+  // 22,214 patches for sqlite3.c), and on wasm32-wasip3 each seek opens a new
+  // write stream. The bytes are identical; clang -c sqlite3.c spends 47% less
+  // wall time on Wasmtime and 48% less on Node.
+  if (!Config.getText())
+    BufferOS.emplace(*FileOS);
+#else
   if (!FileOS->supportsSeeking() && !Config.getText())
     BufferOS.emplace(*FileOS);
+#endif
 
   return Error::success();
 }
