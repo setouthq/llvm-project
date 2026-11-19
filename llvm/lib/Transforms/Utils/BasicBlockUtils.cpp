@@ -13,6 +13,7 @@
 
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
@@ -105,7 +106,12 @@ bool llvm::HasLoopOrEntryConvergenceToken(const BasicBlock *BB) {
 void llvm::detachDeadBlocks(ArrayRef<BasicBlock *> BBs,
                             SmallVectorImpl<DominatorTree::UpdateType> *Updates,
                             bool KeepOneInputPHIs) {
-  SmallPtrSet<BasicBlock *, 4> UniqueEHRetBlocksToDelete;
+  // A SetVector, not a SmallPtrSet: the blocks are detached in this order, and
+  // each detach removes a PHI entry in the unwind destination by swapping the
+  // last entry into its place. Iterating a pointer-hashed set would make the
+  // surviving PHI operand order depend on heap addresses, so the same input
+  // could produce different (equivalent) IR from run to run.
+  SmallSetVector<BasicBlock *, 4> UniqueEHRetBlocksToDelete;
   for (auto *BB : BBs) {
     auto NonFirstPhiIt = BB->getFirstNonPHIIt();
     if (NonFirstPhiIt != BB->end()) {
